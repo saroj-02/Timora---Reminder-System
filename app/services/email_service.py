@@ -22,31 +22,41 @@ logger = logging.getLogger(__name__)
 
 def _clean(value: object) -> str:
     """Convert configuration value to a clean string."""
+
     if value is None:
         return ""
+
     return str(value).strip()
 
 
 def _clean_password(value: object) -> str:
     """
-    Gmail App Passwords are often displayed as:
+    Clean a Gmail App Password.
 
-        abcd efgh ijkl mnop
-
-    Gmail expects:
-
-        abcdefghijklmnop
+    Gmail may display an App Password with spaces.
+    The spaces are removed before SMTP authentication.
     """
-    return "".join(_clean(value).split())
+
+    return "".join(
+        _clean(value).split()
+    )
 
 
 def smtp_configuration_status() -> dict[str, object]:
-    """Return SMTP configuration without exposing the password."""
+    """
+    Return SMTP configuration status
+    without exposing the password.
+    """
 
     host = _clean(settings.SMTP_HOST)
     username = _clean(settings.SMTP_USERNAME)
-    password = _clean_password(settings.SMTP_PASSWORD)
-    from_email = _clean(settings.SMTP_FROM_EMAIL) or username
+    password = _clean_password(
+        settings.SMTP_PASSWORD
+    )
+    from_email = (
+        _clean(settings.SMTP_FROM_EMAIL)
+        or username
+    )
 
     return {
         "host": host,
@@ -64,10 +74,13 @@ def _send_email(
     subject: str,
     body: str,
 ) -> bool:
+    """Send one email through SMTP."""
 
     host = _clean(settings.SMTP_HOST)
     username = _clean(settings.SMTP_USERNAME)
-    password = _clean_password(settings.SMTP_PASSWORD)
+    password = _clean_password(
+        settings.SMTP_PASSWORD
+    )
 
     from_email = (
         _clean(settings.SMTP_FROM_EMAIL)
@@ -81,9 +94,9 @@ def _send_email(
 
     recipient = recipient.strip()
 
-    # ─────────────────────────────────────────────
+    # -----------------------------------------------------------------------
     # Configuration validation
-    # ─────────────────────────────────────────────
+    # -----------------------------------------------------------------------
 
     if not host:
         logger.error(
@@ -130,14 +143,18 @@ def _send_email(
         settings.SMTP_USE_TLS,
     )
 
-    # Gmail App Password should normally be 16 characters.
+    # Gmail App Passwords are normally 16 characters.
     if host.lower() == "smtp.gmail.com":
         if len(password) != 16:
             logger.warning(
-                "Gmail App Password length is %s after "
-                "removing spaces. Expected 16 characters.",
+                "Gmail App Password length is %s "
+                "after removing spaces.",
                 len(password),
             )
+
+    # -----------------------------------------------------------------------
+    # Build email
+    # -----------------------------------------------------------------------
 
     message = EmailMessage()
 
@@ -154,6 +171,10 @@ def _send_email(
     message.set_content(body)
 
     context = ssl.create_default_context()
+
+    # -----------------------------------------------------------------------
+    # SMTP delivery
+    # -----------------------------------------------------------------------
 
     try:
         logger.info(
@@ -207,57 +228,45 @@ def _send_email(
         return True
 
     except smtplib.SMTPAuthenticationError as exc:
-
         logger.error(
             "EMAIL FAILED: Gmail/SMTP authentication "
             "was rejected. Code=%s error=%s",
             exc.smtp_code,
             exc.smtp_error,
         )
-
         return False
 
     except smtplib.SMTPConnectError as exc:
-
         logger.error(
             "EMAIL FAILED: unable to connect to SMTP "
             "server. Code=%s error=%s",
             exc.smtp_code,
             exc.smtp_error,
         )
-
         return False
 
     except smtplib.SMTPServerDisconnected:
-
         logger.exception(
             "EMAIL FAILED: SMTP server disconnected."
         )
-
         return False
 
     except smtplib.SMTPException:
-
         logger.exception(
             "EMAIL FAILED: SMTP protocol error."
         )
-
         return False
 
     except (TimeoutError, OSError):
-
         logger.exception(
             "EMAIL FAILED: SMTP network/timeout error."
         )
-
         return False
 
     except Exception:
-
         logger.exception(
             "EMAIL FAILED: unexpected error."
         )
-
         return False
 
 
@@ -268,6 +277,7 @@ async def send_reminder_email(
     category: Optional[str] = None,
     priority: Optional[str] = None,
 ) -> bool:
+    """Send a formatted Timora reminder email."""
 
     category_text = category or "Reminder"
     priority_text = priority or "Normal"
