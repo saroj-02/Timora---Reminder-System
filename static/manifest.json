@@ -1,0 +1,29 @@
+{
+  "name": "Timora – Smart Task Reminder",
+  "short_name": "Timora",
+  "description": "Smart, timezone-aware task reminder web application with background push notifications.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0F0F1A",
+  "theme_color": "#7C3AED",
+  "icons": [
+    {
+      "src": "/static/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/icons/badge-72.png",
+      "sizes": "72x72",
+      "type": "image/png",
+      "purpose": "badge"
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+version: "3.8"
+
+services:
+  # ── MongoDB Database ────────────────────────────────────────────────────────
+  mongodb:
+    image: mongo:7.0
+    container_name: timora-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: timora
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ── Redis (for production Celery worker) ────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: timora-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Timora Web Application (FastAPI + NiceGUI + APScheduler) ───────────────
+  app:
+    build: .
+    container_name: timora-app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGODB_URL=mongodb://mongodb:27017
+      - DATABASE_NAME=timora
+      - REDIS_URL=redis://redis:6379/0
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8000
+      - APP_DEBUG=false
+    env_file:
+      - .env
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Celery Background Worker (Production Scheduler) ─────────────────────────
+  celery-worker:
+    build: .
+    container_name: timora-celery-worker
+    restart: unless-stopped
+    command: celery -A app.worker.celery_app worker --beat --loglevel=info
+    environment:
+      - MONGODB_URL=mongodb://mongodb:27017
+      - DATABASE_NAME=timora
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles:
+      - production
+
+volumes:
+  mongo_data:
+  redis_data:
