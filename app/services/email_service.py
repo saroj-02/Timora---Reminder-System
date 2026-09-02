@@ -1,7 +1,7 @@
 """
 Timora – Email Notification Service
 
-Sends reminder emails to users through Gmail SMTP.
+Reliable SMTP email delivery with detailed logging.
 """
 
 from __future__ import annotations
@@ -20,28 +20,43 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
-def _clean(value: str | None) -> str:
-    """Clean environment values safely."""
-    if not value:
+def _clean(value: object) -> str:
+    """Convert configuration value to a clean string."""
+    if value is None:
         return ""
+    return str(value).strip()
 
-    return value.strip()
 
-
-def _clean_app_password(value: str | None) -> str:
+def _clean_password(value: object) -> str:
     """
-    Gmail App Passwords are sometimes copied with spaces.
+    Gmail App Passwords are often displayed as:
 
-    Example:
         abcd efgh ijkl mnop
 
-    Gmail SMTP expects:
+    Gmail expects:
+
         abcdefghijklmnop
     """
-    if not value:
-        return ""
+    return "".join(_clean(value).split())
 
-    return "".join(value.split())
+
+def smtp_configuration_status() -> dict[str, object]:
+    """Return SMTP configuration without exposing the password."""
+
+    host = _clean(settings.SMTP_HOST)
+    username = _clean(settings.SMTP_USERNAME)
+    password = _clean_password(settings.SMTP_PASSWORD)
+    from_email = _clean(settings.SMTP_FROM_EMAIL) or username
+
+    return {
+        "host": host,
+        "port": settings.SMTP_PORT,
+        "username_configured": bool(username),
+        "password_configured": bool(password),
+        "password_length": len(password),
+        "from_email_configured": bool(from_email),
+        "tls": settings.SMTP_USE_TLS,
+    }
 
 
 def _send_email(
@@ -49,66 +64,87 @@ def _send_email(
     subject: str,
     body: str,
 ) -> bool:
-    """Send one email using the configured SMTP server."""
 
-    smtp_host = _clean(settings.SMTP_HOST)
-    smtp_username = _clean(settings.SMTP_USERNAME)
-    smtp_password = _clean_app_password(settings.SMTP_PASSWORD)
+    host = _clean(settings.SMTP_HOST)
+    username = _clean(settings.SMTP_USERNAME)
+    password = _clean_password(settings.SMTP_PASSWORD)
 
-    smtp_from_email = (
+    from_email = (
         _clean(settings.SMTP_FROM_EMAIL)
-        or smtp_username
+        or username
     )
 
-    smtp_from_name = (
+    from_name = (
         _clean(settings.SMTP_FROM_NAME)
         or "Timora"
     )
 
-    smtp_port = settings.SMTP_PORT
+    recipient = recipient.strip()
 
     # ─────────────────────────────────────────────
     # Configuration validation
     # ─────────────────────────────────────────────
 
-    if not smtp_host:
+    if not host:
         logger.error(
-            "EMAIL ERROR: SMTP_HOST is empty."
+            "EMAIL FAILED: SMTP_HOST is missing."
         )
         return False
 
-    if not smtp_username:
+    if not username:
         logger.error(
-            "EMAIL ERROR: SMTP_USERNAME is empty."
+            "EMAIL FAILED: SMTP_USERNAME is missing."
         )
         return False
 
-    if not smtp_password:
+    if not password:
         logger.error(
-            "EMAIL ERROR: SMTP_PASSWORD is empty."
+            "EMAIL FAILED: SMTP_PASSWORD is missing."
         )
         return False
 
-    if not smtp_from_email:
+    if not from_email:
         logger.error(
-            "EMAIL ERROR: SMTP_FROM_EMAIL is empty."
+            "EMAIL FAILED: SMTP_FROM_EMAIL is missing."
         )
         return False
-
-    recipient = _clean(recipient)
 
     if not recipient:
         logger.error(
-            "EMAIL ERROR: recipient email is empty."
+            "EMAIL FAILED: recipient is empty."
         )
         return False
+
+    logger.info(
+        "SMTP configuration: host=%s port=%s "
+        "username_configured=%s "
+        "password_configured=%s "
+        "password_length=%s "
+        "from_email=%s TLS=%s",
+        host,
+        settings.SMTP_PORT,
+        bool(username),
+        bool(password),
+        len(password),
+        from_email,
+        settings.SMTP_USE_TLS,
+    )
+
+    # Gmail App Password should normally be 16 characters.
+    if host.lower() == "smtp.gmail.com":
+        if len(password) != 16:
+            logger.warning(
+                "Gmail App Password length is %s after "
+                "removing spaces. Expected 16 characters.",
+                len(password),
+            )
 
     message = EmailMessage()
 
     message["From"] = formataddr(
         (
-            smtp_from_name,
-            smtp_from_email,
+            from_name,
+            from_email,
         )
     )
 
@@ -117,29 +153,24 @@ def _send_email(
 
     message.set_content(body)
 
-    logger.info(
-        "Connecting to SMTP server %s:%s...",
-        smtp_host,
-        smtp_port,
-    )
+    context = ssl.create_default_context()
 
     try:
-        # ─────────────────────────────────────────
-        # Gmail SMTP with STARTTLS
-        # ─────────────────────────────────────────
+        logger.info(
+            "Connecting to SMTP server %s:%s...",
+            host,
+            settings.SMTP_PORT,
+        )
 
-        if settings.SMTP_USE_TLS:
+        with smtplib.SMTP(
+            host=host,
+            port=settings.SMTP_PORT,
+            timeout=30,
+        ) as server:
 
-            context = ssl.create_default_context()
+            server.ehlo()
 
-            with smtplib.SMTP(
-                smtp_host,
-                smtp_port,
-                timeout=30,
-            ) as server:
-
-                server.ehlo()
-
+            if settings.SMTP_USE_TLS:
                 logger.info(
                     "Starting SMTP TLS..."
                 )
@@ -150,50 +181,26 @@ def _send_email(
 
                 server.ehlo()
 
-                logger.info(
-                    "Authenticating SMTP user %s...",
-                    smtp_username,
-                )
+            logger.info(
+                "Authenticating SMTP user %s...",
+                username,
+            )
 
-                server.login(
-                    smtp_username,
-                    smtp_password,
-                )
+            server.login(
+                username,
+                password,
+            )
 
-                logger.info(
-                    "SMTP authentication successful."
-                )
+            logger.info(
+                "SMTP authentication successful."
+            )
 
-                server.send_message(
-                    message
-                )
-
-        # ─────────────────────────────────────────
-        # SMTP without TLS
-        # ─────────────────────────────────────────
-
-        else:
-
-            with smtplib.SMTP(
-                smtp_host,
-                smtp_port,
-                timeout=30,
-            ) as server:
-
-                server.ehlo()
-
-                server.login(
-                    smtp_username,
-                    smtp_password,
-                )
-
-                server.send_message(
-                    message
-                )
+            server.send_message(
+                message
+            )
 
         logger.info(
-            "✅ EMAIL SENT successfully: %s -> %s",
-            smtp_from_email,
+            "EMAIL SUCCESS: reminder email sent to %s",
             recipient,
         )
 
@@ -202,20 +209,10 @@ def _send_email(
     except smtplib.SMTPAuthenticationError as exc:
 
         logger.error(
-            "❌ Gmail SMTP authentication failed."
-        )
-
-        logger.error(
-            "Check SMTP_USERNAME and Gmail App Password."
-        )
-
-        logger.error(
-            "Do NOT use the normal Gmail account password."
-        )
-
-        logger.error(
-            "SMTP authentication details: %s",
-            exc,
+            "EMAIL FAILED: Gmail/SMTP authentication "
+            "was rejected. Code=%s error=%s",
+            exc.smtp_code,
+            exc.smtp_error,
         )
 
         return False
@@ -223,50 +220,34 @@ def _send_email(
     except smtplib.SMTPConnectError as exc:
 
         logger.error(
-            "❌ Could not connect to SMTP server %s:%s",
-            smtp_host,
-            smtp_port,
-        )
-
-        logger.error(
-            "SMTP connection error: %s",
-            exc,
+            "EMAIL FAILED: unable to connect to SMTP "
+            "server. Code=%s error=%s",
+            exc.smtp_code,
+            exc.smtp_error,
         )
 
         return False
 
-    except smtplib.SMTPServerDisconnected as exc:
+    except smtplib.SMTPServerDisconnected:
 
-        logger.error(
-            "❌ SMTP server disconnected unexpectedly: %s",
-            exc,
+        logger.exception(
+            "EMAIL FAILED: SMTP server disconnected."
         )
 
         return False
 
-    except smtplib.SMTPException as exc:
+    except smtplib.SMTPException:
 
-        logger.error(
-            "❌ SMTP error while sending email: %s",
-            exc,
+        logger.exception(
+            "EMAIL FAILED: SMTP protocol error."
         )
 
         return False
 
-    except TimeoutError as exc:
+    except (TimeoutError, OSError):
 
-        logger.error(
-            "❌ SMTP connection timed out: %s",
-            exc,
-        )
-
-        return False
-
-    except OSError as exc:
-
-        logger.error(
-            "❌ Network/OS error while connecting to SMTP: %s",
-            exc,
+        logger.exception(
+            "EMAIL FAILED: SMTP network/timeout error."
         )
 
         return False
@@ -274,7 +255,7 @@ def _send_email(
     except Exception:
 
         logger.exception(
-            "❌ Unexpected error while sending email."
+            "EMAIL FAILED: unexpected error."
         )
 
         return False
@@ -287,56 +268,38 @@ async def send_reminder_email(
     category: Optional[str] = None,
     priority: Optional[str] = None,
 ) -> bool:
-    """
-    Send a Timora reminder email.
 
-    SMTP is synchronous, so the operation runs in
-    a worker thread to avoid blocking asyncio.
-    """
+    category_text = category or "Reminder"
+    priority_text = priority or "Normal"
 
-    category_text = (
-        category
-        if category
-        else "Reminder"
-    )
-
-    priority_text = (
-        priority
-        if priority
-        else "Normal"
-    )
-
-    subject = (
-        f"Timora Reminder: {title}"
-    )
+    subject = f"🔔 Timora Reminder: {title}"
 
     body = f"""
 Hello,
 
 You have a reminder from Timora.
 
-========================================
+━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-TASK
+🔔 TASK
 {title}
 
-TIME
+🕐 TIME
 {scheduled_time}
 
-CATEGORY
+📂 CATEGORY
 {category_text}
 
-PRIORITY
+⚡ PRIORITY
 {priority_text}
 
-========================================
+━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Your task is due now.
 
 Open Timora to manage this reminder.
 
-This email was automatically sent by
-Timora – Smart Reminder.
+This email was automatically sent by Timora – Smart Reminder.
 """.strip()
 
     return await asyncio.to_thread(
