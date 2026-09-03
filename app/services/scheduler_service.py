@@ -2,19 +2,18 @@
 Timora Reminder Scheduler
 
 Responsibilities:
-- Check for due reminders
+- Check pending/snoozed reminders
+- Detect reminders that are due
 - Send push notifications
 - Send email notifications
 - Mark reminders as sent
 - Re-arm recurring reminders
-- Handle snoozed reminders
 - Run continuously with APScheduler
 
-Optimized for Render:
-- Poll every 10 seconds instead of every 5 seconds
-- Avoid unnecessary verbose logs
-- Process only pending/snoozed reminders
-- Prevent overlapping scheduler executions
+Render optimized:
+- Poll every 10 seconds
+- Avoid noisy logs when there is nothing to process
+- Prevent overlapping executions
 """
 
 from __future__ import annotations
@@ -38,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Scheduler configuration
+# Configuration
 # ---------------------------------------------------------------------------
 
 POLL_INTERVAL_SECONDS = 10
@@ -48,7 +47,7 @@ _scheduler_lock = asyncio.Lock()
 
 
 # ---------------------------------------------------------------------------
-# Utility helpers
+# Helpers
 # ---------------------------------------------------------------------------
 
 def _as_utc(value: datetime) -> datetime:
@@ -61,23 +60,29 @@ def _as_utc(value: datetime) -> datetime:
 
 
 def _enum_value(value: Any) -> str:
-    """Safely extract the value from an enum."""
+    """Safely return an enum's string value."""
 
     return getattr(value, "value", str(value))
 
 
 def _due_at(reminder: Reminder) -> datetime:
     """
-    Calculate the actual notification time.
+    Calculate when the notification should actually fire.
 
     Example:
-        Reminder at 10:00 with 10-minute advance notification
-        -> notification due at 09:50.
+        scheduled = 10:00
+        reminder_before = 10_minutes
+
+        notification due = 09:50
     """
 
-    scheduled = _as_utc(reminder.scheduled_time_utc)
+    scheduled = _as_utc(
+        reminder.scheduled_time_utc
+    )
 
-    before_value = _enum_value(reminder.reminder_before)
+    before_value = _enum_value(
+        reminder.reminder_before
+    )
 
     before_minutes = {
         "at_time": 0,
@@ -89,21 +94,35 @@ def _due_at(reminder: Reminder) -> datetime:
         "1_day": 1440,
     }
 
-    minutes = before_minutes.get(before_value, 0)
+    minutes = before_minutes.get(
+        before_value,
+        0,
+    )
 
-    return scheduled - timedelta(minutes=minutes)
+    return scheduled - timedelta(
+        minutes=minutes
+    )
 
 
-def _formatted_reminder_time(reminder: Reminder) -> str:
-    """Format reminder time in the reminder's configured timezone."""
+def _formatted_reminder_time(
+    reminder: Reminder,
+) -> str:
+    """Format reminder time using its configured timezone."""
 
     try:
-        timezone_name = reminder.timezone or "UTC"
-        local_timezone = ZoneInfo(timezone_name)
+        timezone_name = (
+            reminder.timezone or "UTC"
+        )
+
+        local_timezone = ZoneInfo(
+            timezone_name
+        )
 
         local_time = _as_utc(
             reminder.scheduled_time_utc
-        ).astimezone(local_timezone)
+        ).astimezone(
+            local_timezone
+        )
 
         return local_time.strftime(
             "%d %b %Y, %I:%M %p"
@@ -127,45 +146,47 @@ async def _get_reminder_user(
     """
     Find the user who owns the reminder.
 
-    Reminder.user_id is stored as a string/ObjectId-compatible value.
+    Reminder.user_id is stored as a string.
+    User.id is a Mongo/Beanie ObjectId.
     """
 
     try:
-        user_id = str(reminder.user_id)
+        user_id = str(
+            reminder.user_id
+        ).strip()
 
         if not ObjectId.is_valid(user_id):
             logger.error(
-                "Invalid user_id for reminder %s: %s",
+                "Invalid user_id | reminder=%s | user_id=%s",
                 reminder.id,
                 user_id,
             )
             return None
 
-        user_object_id = ObjectId(user_id)
-
         user = await User.find_one(
-            User.id == user_object_id
+            User.id == ObjectId(user_id)
         )
 
         if user is None:
             logger.error(
-                "User not found for reminder %s (user_id=%s)",
+                "User not found | reminder=%s | user_id=%s",
                 reminder.id,
                 user_id,
             )
+            return None
 
         return user
 
     except Exception:
         logger.exception(
-            "Failed to find user for reminder %s",
+            "Failed to find reminder owner | reminder=%s",
             reminder.id,
         )
         return None
 
 
 # ---------------------------------------------------------------------------
-# Email notification
+# Email
 # ---------------------------------------------------------------------------
 
 async def _send_email_notification(
@@ -174,25 +195,33 @@ async def _send_email_notification(
     """Send reminder email to the reminder owner."""
 
     try:
-        user = await _get_reminder_user(reminder)
+        user = await _get_reminder_user(
+            reminder
+        )
 
         if user is None:
             logger.warning(
-                "Email skipped: user not found for reminder %s",
+                "Email skipped: user not found | reminder=%s",
                 reminder.id,
             )
             return False
 
-        recipient = str(user.email).strip()
+        recipient = str(
+            user.email
+        ).strip()
 
         if not recipient:
             logger.warning(
-                "Email skipped: user has no email for reminder %s",
+                "Email skipped: user email empty | reminder=%s",
                 reminder.id,
             )
             return False
 
-        reminder_time = _formatted_reminder_time(reminder)
+        reminder_time = (
+            _formatted_reminder_time(
+                reminder
+            )
+        )
 
         logger.info(
             "Sending reminder email | reminder=%s | to=%s",
@@ -201,31 +230,33 @@ async def _send_email_notification(
         )
 
         # IMPORTANT:
-        # These parameter names exactly match email_service.py.
+        # This matches the actual email_service.py signature.
         result = await send_reminder_email(
-            recipient=recipient,
-            title=reminder.title,
-            scheduled_time=reminder_time,
-            category=_enum_value(reminder.category),
-            priority=_enum_value(reminder.priority),
+            recipient,
+            reminder.title,
+            reminder_time,
+            _enum_value(reminder.category),
+            _enum_value(reminder.priority),
         )
 
         if result:
             logger.info(
-                "Reminder email sent successfully | reminder=%s",
+                "EMAIL SUCCESS | reminder=%s | to=%s",
                 reminder.id,
+                recipient,
             )
         else:
             logger.error(
-                "Reminder email failed | reminder=%s",
+                "EMAIL FAILED | reminder=%s | to=%s",
                 reminder.id,
+                recipient,
             )
 
         return bool(result)
 
     except Exception:
         logger.exception(
-            "Unexpected email error for reminder %s",
+            "Unexpected email error | reminder=%s",
             reminder.id,
         )
         return False
@@ -241,44 +272,39 @@ async def _send_push_notification(
     """Send web push notification."""
 
     try:
-        delivery_count = await notify_reminder_due(reminder)
+        result = await notify_reminder_due(
+            reminder
+        )
 
-        success = delivery_count > 0
-
-        if success:
+        if result:
             logger.info(
-                "Push notification sent | reminder=%s | devices=%s",
+                "PUSH SUCCESS | reminder=%s",
                 reminder.id,
-                delivery_count,
             )
         else:
             logger.warning(
-                "Push notification unavailable/failed | reminder=%s",
+                "PUSH FAILED/UNAVAILABLE | reminder=%s",
                 reminder.id,
             )
 
-        return success
+        return bool(result)
 
     except Exception:
         logger.exception(
-            "Unexpected push notification error | reminder=%s",
+            "Unexpected push error | reminder=%s",
             reminder.id,
         )
         return False
 
 
 # ---------------------------------------------------------------------------
-# Recurring reminder
+# Recurring reminders
 # ---------------------------------------------------------------------------
 
 async def _rearm_recurring_reminder(
     reminder: Reminder,
 ) -> bool:
-    """
-    Calculate and schedule the next occurrence.
-
-    Returns True when successfully re-armed.
-    """
+    """Calculate and save the next recurring occurrence."""
 
     try:
         repeat_type = _enum_value(
@@ -288,8 +314,13 @@ async def _rearm_recurring_reminder(
         if repeat_type == "never":
             return False
 
-        next_occurrence = compute_next_occurrence(
-            reminder
+        # IMPORTANT:
+        # The actual reminder_service.py expects
+        # the complete Reminder object.
+        next_occurrence = (
+            compute_next_occurrence(
+                reminder
+            )
         )
 
         if next_occurrence is None:
@@ -299,11 +330,16 @@ async def _rearm_recurring_reminder(
             )
             return False
 
-        reminder.scheduled_time_utc = _as_utc(
-            next_occurrence
+        reminder.scheduled_time_utc = (
+            _as_utc(
+                next_occurrence
+            )
         )
 
-        reminder.status = ReminderStatus.PENDING
+        reminder.status = (
+            ReminderStatus.PENDING
+        )
+
         reminder.notification_sent_at = None
         reminder.snooze_until = None
 
@@ -319,83 +355,90 @@ async def _rearm_recurring_reminder(
 
     except Exception:
         logger.exception(
-            "Failed to re-arm recurring reminder %s",
+            "Failed to re-arm recurring reminder | reminder=%s",
             reminder.id,
         )
         return False
 
 
 # ---------------------------------------------------------------------------
-# Due reminder processing
+# Process due reminders
 # ---------------------------------------------------------------------------
 
 async def _process_due_reminders() -> None:
     """
-    Process reminders that are due.
-
-    This function intentionally stays lightweight because it
-    runs continuously on the Render web service.
+    Find and process reminders that are due.
     """
 
     async with _scheduler_lock:
+
         try:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(
+                timezone.utc
+            )
 
             # ---------------------------------------------------------------
             # Load pending reminders
             # ---------------------------------------------------------------
 
-            pending_reminders = await Reminder.find(
-                Reminder.status == ReminderStatus.PENDING
+            pending = await Reminder.find(
+                Reminder.status
+                == ReminderStatus.PENDING
             ).to_list()
 
             # ---------------------------------------------------------------
             # Load snoozed reminders
             # ---------------------------------------------------------------
 
-            snoozed_reminders = await Reminder.find(
-                Reminder.status == ReminderStatus.SNOOZED
+            snoozed = await Reminder.find(
+                Reminder.status
+                == ReminderStatus.SNOOZED
             ).to_list()
 
             reminders = (
-                pending_reminders
-                + snoozed_reminders
+                pending + snoozed
             )
 
             if not reminders:
                 return
 
+            logger.debug(
+                "Scheduler checked %d active reminder(s)",
+                len(reminders),
+            )
+
             due_count = 0
 
             # ---------------------------------------------------------------
-            # Process reminders
+            # Process
             # ---------------------------------------------------------------
 
             for reminder in reminders:
+
                 try:
+
                     # -------------------------------------------------------
-                    # Handle snoozed reminder
+                    # Determine due time
                     # -------------------------------------------------------
 
                     if (
                         reminder.status
                         == ReminderStatus.SNOOZED
                     ):
-                        if reminder.snooze_until is None:
+                        if (
+                            reminder.snooze_until
+                            is None
+                        ):
                             continue
 
-                        snooze_until = _as_utc(
+                        due_time = _as_utc(
                             reminder.snooze_until
                         )
 
-                        if snooze_until > now:
-                            continue
-
-                        # Snooze period has ended.
-                        due_time = snooze_until
-
                     else:
-                        due_time = _due_at(reminder)
+                        due_time = _due_at(
+                            reminder
+                        )
 
                     # -------------------------------------------------------
                     # Not due yet
@@ -407,16 +450,15 @@ async def _process_due_reminders() -> None:
                     due_count += 1
 
                     logger.info(
-                        "Reminder due | id=%s | title=%s | scheduled=%s",
+                        "REMINDER DUE | id=%s | title=%s | due=%s | now=%s",
                         reminder.id,
                         reminder.title,
-                        _as_utc(
-                            reminder.scheduled_time_utc
-                        ).isoformat(),
+                        due_time.isoformat(),
+                        now.isoformat(),
                     )
 
                     # -------------------------------------------------------
-                    # Send push notification
+                    # Send push
                     # -------------------------------------------------------
 
                     push_success = (
@@ -426,7 +468,7 @@ async def _process_due_reminders() -> None:
                     )
 
                     # -------------------------------------------------------
-                    # Send email notification
+                    # Send email
                     # -------------------------------------------------------
 
                     email_success = (
@@ -436,8 +478,7 @@ async def _process_due_reminders() -> None:
                     )
 
                     logger.info(
-                        "Notification result | reminder=%s | "
-                        "push=%s | email=%s",
+                        "NOTIFICATION RESULT | reminder=%s | push=%s | email=%s",
                         reminder.id,
                         push_success,
                         email_success,
@@ -447,14 +488,22 @@ async def _process_due_reminders() -> None:
                     # Mark as sent
                     # -------------------------------------------------------
 
-                    reminder.status = ReminderStatus.SENT
+                    reminder.status = (
+                        ReminderStatus.SENT
+                    )
+
                     reminder.notification_sent_at = now
                     reminder.snooze_until = None
 
                     await reminder.save()
 
+                    logger.info(
+                        "REMINDER MARKED SENT | reminder=%s",
+                        reminder.id,
+                    )
+
                     # -------------------------------------------------------
-                    # Re-arm recurring reminder
+                    # Recurring reminder
                     # -------------------------------------------------------
 
                     repeat_type = _enum_value(
@@ -462,13 +511,14 @@ async def _process_due_reminders() -> None:
                     )
 
                     if repeat_type != "never":
+
                         await _rearm_recurring_reminder(
                             reminder
                         )
 
                 except Exception:
                     logger.exception(
-                        "Failed processing reminder %s",
+                        "Failed processing reminder | reminder=%s",
                         reminder.id,
                     )
 
@@ -492,16 +542,12 @@ async def _process_due_reminders() -> None:
 # ---------------------------------------------------------------------------
 
 def start_scheduler() -> None:
-    """
-    Start APScheduler.
-
-    Polling every 10 seconds reduces MongoDB/CPU load on Render
-    while keeping reminders responsive.
-    """
+    """Start APScheduler."""
 
     global _scheduler
 
     if _scheduler is not None:
+
         if _scheduler.running:
             logger.info(
                 "APScheduler already running"
@@ -545,7 +591,9 @@ def stop_scheduler() -> None:
         return
 
     try:
+
         if _scheduler.running:
+
             _scheduler.shutdown(
                 wait=False
             )
