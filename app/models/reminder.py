@@ -39,6 +39,7 @@ class ReminderStatus(str, Enum):
 class RepeatType(str, Enum):
     NEVER = "never"
     DAILY = "daily"
+    WEEKDAYS = "weekdays"
     WEEKLY = "weekly"
     MONTHLY = "monthly"
     YEARLY = "yearly"

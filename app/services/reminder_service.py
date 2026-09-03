@@ -41,10 +41,19 @@ async def create_reminder(
     user: User,
     body: ReminderCreateRequest,
 ) -> Reminder:
+    """
+    Create reminder and immediately create its scheduler/email job.
+    """
+
     utc_time = local_to_utc(
         body.local_datetime,
         body.timezone,
     )
+
+    if utc_time <= now_utc():
+        raise ValueError(
+            "The selected reminder time has already passed."
+        )
 
     reminder = Reminder(
         user_id=str(user.id),
@@ -57,15 +66,43 @@ async def create_reminder(
         repeat_type=body.repeat_type,
         reminder_before=body.reminder_before,
         status=ReminderStatus.PENDING,
+        notification_sent_at=None,
+        snooze_until=None,
     )
 
     await reminder.insert()
 
     logger.info(
-        "Created reminder %s for user %s",
+        "Created reminder %s for user %s | scheduled=%s | timezone=%s",
         reminder.id,
         user.id,
+        reminder.scheduled_time_utc.isoformat(),
+        reminder.timezone,
     )
+
+    # Local import avoids circular import:
+    # scheduler_service imports compute_next_occurrence
+    # from this module.
+    from app.services.scheduler_service import (
+        schedule_reminder,
+    )
+
+    scheduled = schedule_reminder(
+        reminder
+    )
+
+    if not scheduled:
+        logger.error(
+            "Reminder saved but scheduler job could not be created | reminder=%s",
+            reminder.id,
+        )
+
+    else:
+        logger.info(
+            "Reminder email job created | reminder=%s | scheduled=%s",
+            reminder.id,
+            reminder.scheduled_time_utc.isoformat(),
+        )
 
     return reminder
 
@@ -224,29 +261,51 @@ async def update_reminder(
     reminder: Reminder,
     body: ReminderUpdateRequest,
 ) -> Reminder:
+    """
+    Update reminder.
+
+    Every update refreshes the APScheduler job.
+    If date/time changed, old email schedule is replaced automatically.
+    """
 
     if body.title is not None:
         reminder.title = body.title
 
     if body.description is not None:
-        reminder.description = body.description
+        reminder.description = (
+            body.description
+        )
 
     if body.category is not None:
-        reminder.category = body.category
+        reminder.category = (
+            body.category
+        )
 
     if body.priority is not None:
-        reminder.priority = body.priority
+        reminder.priority = (
+            body.priority
+        )
 
     if body.repeat_type is not None:
-        reminder.repeat_type = body.repeat_type
+        reminder.repeat_type = (
+            body.repeat_type
+        )
 
     if body.reminder_before is not None:
-        reminder.reminder_before = body.reminder_before
+        reminder.reminder_before = (
+            body.reminder_before
+        )
+
+    # ---------------------------------------------------------
+    # Time/date/timezone update
+    # ---------------------------------------------------------
 
     if body.local_datetime is not None:
+
         tz = (
             body.timezone
             or reminder.timezone
+            or "UTC"
         )
 
         utc_time = local_to_utc(
@@ -256,20 +315,62 @@ async def update_reminder(
 
         if utc_time <= now_utc():
             raise ValueError(
-                "The selected time has already passed."
+                "The selected reminder time has already passed."
             )
 
-        reminder.scheduled_time_utc = utc_time
+        reminder.scheduled_time_utc = (
+            utc_time
+        )
+
         reminder.timezone = tz
 
-        # Re-arm reminder.
-        reminder.status = (
-            ReminderStatus.PENDING
+    elif body.timezone is not None:
+        reminder.timezone = (
+            body.timezone
         )
+
+    # Editing/rescheduling means the reminder becomes active again.
+    reminder.status = (
+        ReminderStatus.PENDING
+    )
+
+    reminder.notification_sent_at = None
+    reminder.snooze_until = None
+    reminder.completed_at = None
 
     reminder.update_timestamp()
 
     await reminder.save()
+
+    logger.info(
+        "Reminder updated | reminder=%s | scheduled=%s | timezone=%s",
+        reminder.id,
+        reminder.scheduled_time_utc.isoformat(),
+        reminder.timezone,
+    )
+
+    from app.services.scheduler_service import (
+        schedule_reminder,
+    )
+
+    # replace_existing=True inside schedule_reminder()
+    # automatically removes/replaces the previous time.
+    scheduled = schedule_reminder(
+        reminder
+    )
+
+    if scheduled:
+        logger.info(
+            "Reminder email rescheduled | reminder=%s | scheduled=%s",
+            reminder.id,
+            reminder.scheduled_time_utc.isoformat(),
+        )
+
+    else:
+        logger.error(
+            "Reminder updated but scheduler refresh failed | reminder=%s",
+            reminder.id,
+        )
 
     return reminder
 
@@ -277,7 +378,26 @@ async def update_reminder(
 async def delete_reminder(
     reminder: Reminder,
 ) -> None:
+    """Delete reminder and its scheduled email job."""
+
+    reminder_id = str(
+        reminder.id
+    )
+
+    from app.services.scheduler_service import (
+        remove_reminder_job,
+    )
+
+    remove_reminder_job(
+        reminder_id
+    )
+
     await reminder.delete()
+
+    logger.info(
+        "Reminder and scheduler job deleted | reminder=%s",
+        reminder_id,
+    )
 
 
 async def complete_reminder(
@@ -301,21 +421,49 @@ async def snooze_reminder(
     reminder: Reminder,
     minutes: int,
 ) -> Reminder:
+    """Snooze reminder and replace scheduler job."""
+
+    if minutes <= 0:
+        raise ValueError(
+            "Snooze minutes must be greater than zero."
+        )
 
     snooze_until = (
         now_utc()
-        + timedelta(minutes=minutes)
+        + timedelta(
+            minutes=minutes
+        )
     )
 
-    reminder.snooze_until = snooze_until
+    reminder.snooze_until = (
+        snooze_until
+    )
 
     reminder.status = (
         ReminderStatus.SNOOZED
     )
 
+    reminder.notification_sent_at = None
+
     reminder.update_timestamp()
 
     await reminder.save()
+
+    from app.services.scheduler_service import (
+        schedule_reminder,
+    )
+
+    scheduled = schedule_reminder(
+        reminder,
+        run_at=snooze_until,
+    )
+
+    logger.info(
+        "Reminder snoozed | reminder=%s | until=%s | scheduled=%s",
+        reminder.id,
+        snooze_until.isoformat(),
+        scheduled,
+    )
 
     return reminder
 
@@ -324,8 +472,26 @@ async def reschedule_reminder(
     reminder: Reminder,
     utc_time: datetime,
 ) -> Reminder:
+    """Reschedule reminder and replace email scheduler job."""
 
-    reminder.scheduled_time_utc = utc_time
+    utc_time = (
+        utc_time.astimezone(
+            timezone.utc
+        )
+        if utc_time.tzinfo
+        else utc_time.replace(
+            tzinfo=timezone.utc
+        )
+    )
+
+    if utc_time <= now_utc():
+        raise ValueError(
+            "The selected reminder time has already passed."
+        )
+
+    reminder.scheduled_time_utc = (
+        utc_time
+    )
 
     reminder.status = (
         ReminderStatus.PENDING
@@ -333,10 +499,26 @@ async def reschedule_reminder(
 
     reminder.snooze_until = None
     reminder.notification_sent_at = None
+    reminder.completed_at = None
 
     reminder.update_timestamp()
 
     await reminder.save()
+
+    from app.services.scheduler_service import (
+        schedule_reminder,
+    )
+
+    scheduled = schedule_reminder(
+        reminder
+    )
+
+    logger.info(
+        "Reminder rescheduled | reminder=%s | time=%s | scheduled=%s",
+        reminder.id,
+        utc_time.isoformat(),
+        scheduled,
+    )
 
     return reminder
 
