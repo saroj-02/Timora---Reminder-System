@@ -315,6 +315,13 @@ ui.run_with(
     dark=True,
 )
 
+# Explicit NiceGUI hooks for guaranteed initialization
+app.on_startup(init_db)
+app.on_startup(start_scheduler)
+app.on_startup(_ensure_vapid)
+app.on_shutdown(stop_scheduler)
+app.on_shutdown(close_db)
+
 
 if __name__ == "__main__":
     import uvicorn

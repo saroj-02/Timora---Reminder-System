@@ -461,6 +461,37 @@ def _remove_retry_job(
     )
 
 
+def get_reminder_trigger_time(
+    reminder: Reminder,
+) -> datetime:
+    """
+    Calculate the exact UTC datetime when the notification should fire.
+    Takes into account snooze duration and reminder_before advance notice.
+    """
+    if (
+        reminder.status == ReminderStatus.SNOOZED
+        and reminder.snooze_until is not None
+    ):
+        return _as_utc(reminder.snooze_until)
+
+    base_time = _as_utc(reminder.scheduled_time_utc)
+    offset_minutes = 0
+
+    if hasattr(reminder, "reminder_before") and reminder.reminder_before:
+        from app.models.reminder import REMINDER_BEFORE_MINUTES, ReminderBefore
+
+        before_val = reminder.reminder_before
+        if isinstance(before_val, ReminderBefore):
+            offset_minutes = REMINDER_BEFORE_MINUTES.get(before_val, 0)
+        elif isinstance(before_val, str):
+            for k, v in REMINDER_BEFORE_MINUTES.items():
+                if k.value == before_val or k.name.lower() == before_val.lower():
+                    offset_minutes = v
+                    break
+
+    return base_time - timedelta(minutes=offset_minutes)
+
+
 # =============================================================================
 # Schedule Reminder
 # =============================================================================
@@ -489,26 +520,7 @@ def schedule_reminder(
     )
 
     if run_at is None:
-        if (
-            reminder.status
-            == ReminderStatus.SNOOZED
-            and reminder.snooze_until is not None
-        ):
-            run_at = reminder.snooze_until
-        else:
-            base_time = reminder.scheduled_time_utc
-            offset_minutes = 0
-            if hasattr(reminder, "reminder_before") and reminder.reminder_before:
-                from app.models.reminder import REMINDER_BEFORE_MINUTES, ReminderBefore
-                before_val = reminder.reminder_before
-                if isinstance(before_val, ReminderBefore):
-                    offset_minutes = REMINDER_BEFORE_MINUTES.get(before_val, 0)
-                elif isinstance(before_val, str):
-                    for k, v in REMINDER_BEFORE_MINUTES.items():
-                        if k.value == before_val or k.name.lower() == before_val.lower():
-                            offset_minutes = v
-                            break
-            run_at = base_time - timedelta(minutes=offset_minutes)
+        run_at = get_reminder_trigger_time(reminder)
 
     run_at = _as_utc(
         run_at
@@ -1171,29 +1183,7 @@ async def restore_reminder_jobs() -> None:
                 ) is not None:
                     continue
 
-                if (
-                    reminder.status
-                    == ReminderStatus.SNOOZED
-                ):
-                    if (
-                        reminder.snooze_until
-                        is None
-                    ):
-                        logger.warning(
-                            "INVALID SNOOZED REMINDER | "
-                            "reminder=%s",
-                            reminder_id,
-                        )
-                        continue
-
-                    run_at = _as_utc(
-                        reminder.snooze_until
-                    )
-
-                else:
-                    run_at = _as_utc(
-                        reminder.scheduled_time_utc
-                    )
+                run_at = get_reminder_trigger_time(reminder)
 
                 if schedule_reminder(
                     reminder,
@@ -1276,16 +1266,6 @@ async def _recovery_scan() -> None:
             + completed
         )
 
-        logger.info(
-            "RECOVERY SCAN | "
-            "pending=%d | snoozed=%d | "
-            "completed_pending_email=%d | total=%d",
-            len(pending),
-            len(snoozed),
-            len(completed),
-            len(reminders),
-        )
-
         now = datetime.now(
             timezone.utc
         )
@@ -1311,32 +1291,12 @@ async def _recovery_scan() -> None:
                     continue
 
                 # -------------------------------------------------------------
-                # Determine execution time
+                # Determine trigger time
                 # -------------------------------------------------------------
 
-                if (
-                    reminder.status
-                    == ReminderStatus.SNOOZED
-                ):
-                    if (
-                        reminder.snooze_until
-                        is None
-                    ):
-                        logger.warning(
-                            "RECOVERY INVALID SNOOZE | "
-                            "reminder=%s",
-                            reminder_id,
-                        )
-                        continue
-
-                    run_at = _as_utc(
-                        reminder.snooze_until
-                    )
-
-                else:
-                    run_at = _as_utc(
-                        reminder.scheduled_time_utc
-                    )
+                run_at = get_reminder_trigger_time(
+                    reminder
+                )
 
                 # -------------------------------------------------------------
                 # Overdue
@@ -1347,7 +1307,7 @@ async def _recovery_scan() -> None:
 
                     logger.warning(
                         "RECOVERY FOUND OVERDUE REMINDER | "
-                        "reminder=%s | scheduled=%s | now=%s",
+                        "reminder=%s | trigger=%s | now=%s",
                         reminder_id,
                         run_at.isoformat(),
                         now.isoformat(),
@@ -1375,15 +1335,16 @@ async def _recovery_scan() -> None:
                     reminder.id,
                 )
 
-        logger.info(
-            "RECOVERY COMPLETE | "
-            "total=%d | existing=%d | "
-            "restored=%d | overdue=%d",
-            len(reminders),
-            existing,
-            restored,
-            overdue,
-        )
+        if restored > 0 or overdue > 0:
+            logger.info(
+                "RECOVERY SCAN COMPLETE | "
+                "total=%d | existing=%d | "
+                "restored=%d | overdue=%d",
+                len(reminders),
+                existing,
+                restored,
+                overdue,
+            )
 
     except asyncio.CancelledError:
         raise
@@ -1409,30 +1370,37 @@ async def _process_due_reminders() -> int:
 
     pending = await Reminder.find(
         Reminder.status == ReminderStatus.PENDING,
-        Reminder.scheduled_time_utc <= now,
     ).to_list()
 
-    snoozed_candidates = await Reminder.find(
+    snoozed = await Reminder.find(
         Reminder.status == ReminderStatus.SNOOZED,
     ).to_list()
 
-    snoozed = [
-        rem
-        for rem in snoozed_candidates
-        if rem.snooze_until is not None and _as_utc(rem.snooze_until) <= now
-    ]
+    completed = await Reminder.find(
+        Reminder.status == ReminderStatus.COMPLETED,
+    ).to_list()
 
-    due_reminders = pending + snoozed
+    candidates = (
+        pending
+        + snoozed
+        + [
+            rem
+            for rem in completed
+            if rem.notification_sent_at is None
+        ]
+    )
 
-    for rem in due_reminders:
-        try:
-            await _execute_reminder_job(str(rem.id))
-            processed += 1
-        except Exception:
-            logger.exception(
-                "FAILED DIRECT PROCESSING | reminder=%s",
-                rem.id,
-            )
+    for rem in candidates:
+        trigger_time = get_reminder_trigger_time(rem)
+        if trigger_time <= now:
+            try:
+                await _execute_reminder_job(str(rem.id))
+                processed += 1
+            except Exception:
+                logger.exception(
+                    "FAILED DIRECT PROCESSING | reminder=%s",
+                    rem.id,
+                )
 
     return processed
 

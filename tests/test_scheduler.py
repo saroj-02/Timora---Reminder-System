@@ -272,3 +272,28 @@ def test_recurring_weekly_computation():
         local_orig.weekday()
         == local_next.weekday()
     )
+
+
+def test_reminder_trigger_time_calculation():
+    from app.models.reminder import ReminderBefore
+    from app.services.scheduler_service import get_reminder_trigger_time
+
+    now = now_utc()
+    rem = Reminder(
+        user_id="test_user_id",
+        title="Trigger Time Test",
+        scheduled_time_utc=now,
+        reminder_before=ReminderBefore.FIFTEEN_MINUTES,
+    )
+
+    trigger_time = get_reminder_trigger_time(rem)
+    expected_time = now - timedelta(minutes=15)
+    assert abs((trigger_time - expected_time).total_seconds()) < 1
+
+    rem_at_time = Reminder(
+        user_id="test_user_id",
+        title="At Time Test",
+        scheduled_time_utc=now,
+        reminder_before=ReminderBefore.AT_TIME,
+    )
+    assert abs((get_reminder_trigger_time(rem_at_time) - now).total_seconds()) < 1
