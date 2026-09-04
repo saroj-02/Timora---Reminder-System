@@ -2,19 +2,19 @@
 Timora – Reminder Scheduler Service
 
 Responsibilities:
-- Schedule individual reminders with APScheduler date jobs.
-- Restore pending/snoozed reminders after application restart.
-- Send reminder email at the actual scheduled time.
-- Send web push notification on a best-effort basis.
+- Schedule reminders with APScheduler.
+- Restore reminders from MongoDB after restart.
+- Recover missing jobs.
+- Send reminder email at the scheduled time.
 - Retry failed email delivery.
+- Send web push as a best-effort notification.
 - Re-arm recurring reminders.
-- Keep a low-frequency recovery scan.
 
 Important:
-- scheduled_time_utc is always stored in UTC.
-- Email is sent at scheduled_time_utc.
-- reminder_before is NOT applied to email delivery.
-- Browser/in-app "before" notification behavior remains separate.
+- MongoDB is the source of truth.
+- scheduled_time_utc is always UTC.
+- Email is sent at the actual scheduled time.
+- Completing a reminder does NOT cancel its email.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ MISFIRE_GRACE_SECONDS = 300
 
 
 # =============================================================================
-# Global scheduler state
+# Global State
 # =============================================================================
 
 _scheduler: AsyncIOScheduler | None = None
@@ -61,15 +61,14 @@ _processing_lock = asyncio.Lock()
 
 
 # =============================================================================
-# General helpers
+# Helpers
 # =============================================================================
-
 
 def _as_utc(
     value: datetime,
 ) -> datetime:
     """
-    Return a timezone-aware UTC datetime.
+    Convert a datetime to timezone-aware UTC.
     """
 
     if value.tzinfo is None:
@@ -86,7 +85,7 @@ def _enum_value(
     value: Any,
 ) -> str:
     """
-    Safely get the string value from an Enum or normal string.
+    Safely get Enum value.
     """
 
     return str(
@@ -101,29 +100,25 @@ def _enum_value(
 def _reminder_job_id(
     reminder_id: str,
 ) -> str:
-    """
-    Stable APScheduler job ID.
-    """
-
-    return f"timora-reminder-{reminder_id}"
+    return (
+        f"timora-reminder-{reminder_id}"
+    )
 
 
 def _retry_job_id(
     reminder_id: str,
 ) -> str:
-    """
-    Stable APScheduler retry job ID.
-    """
-
-    return f"timora-reminder-retry-{reminder_id}"
+    return (
+        f"timora-reminder-retry-{reminder_id}"
+    )
 
 
 def _get_running_scheduler() -> AsyncIOScheduler | None:
     """
-    Return the active APScheduler instance.
+    Return a running APScheduler instance.
 
-    Keeping the scheduler in a local variable after the None check
-    prevents Pylance Optional-member-access errors.
+    Keeping this as a local Optional reference also avoids
+    Pylance Optional-member-access warnings.
     """
 
     scheduler = _scheduler
@@ -138,15 +133,14 @@ def _get_running_scheduler() -> AsyncIOScheduler | None:
 
 
 # =============================================================================
-# Reminder time formatting
+# Reminder Time
 # =============================================================================
-
 
 def _formatted_reminder_time(
     reminder: Reminder,
 ) -> str:
     """
-    Format scheduled time using the reminder timezone.
+    Format reminder time in its configured timezone.
     """
 
     try:
@@ -189,15 +183,14 @@ def _formatted_reminder_time(
 
 
 # =============================================================================
-# User lookup
+# User Lookup
 # =============================================================================
-
 
 async def _get_reminder_user(
     reminder: Reminder,
 ) -> User | None:
     """
-    Find the User who owns a reminder.
+    Find the user who owns a reminder.
     """
 
     try:
@@ -205,9 +198,12 @@ async def _get_reminder_user(
             reminder.user_id
         ).strip()
 
-        if not ObjectId.is_valid(user_id):
+        if not ObjectId.is_valid(
+            user_id
+        ):
             logger.error(
-                "Invalid reminder user_id | reminder=%s | user_id=%s",
+                "INVALID USER ID | "
+                "reminder=%s | user_id=%s",
                 reminder.id,
                 user_id,
             )
@@ -219,7 +215,8 @@ async def _get_reminder_user(
 
         if user is None:
             logger.error(
-                "Reminder owner not found | reminder=%s | user_id=%s",
+                "REMINDER OWNER NOT FOUND | "
+                "reminder=%s | user_id=%s",
                 reminder.id,
                 user_id,
             )
@@ -229,26 +226,23 @@ async def _get_reminder_user(
 
     except Exception:
         logger.exception(
-            "Failed to find reminder owner | reminder=%s",
+            "USER LOOKUP FAILED | reminder=%s",
             reminder.id,
         )
         return None
 
 
 # =============================================================================
-# Email notification
+# Email
 # =============================================================================
-
 
 async def _send_email_notification(
     reminder: Reminder,
 ) -> bool:
     """
-    Send the reminder email.
+    Send reminder email.
 
-    Returns:
-        True  -> email successfully accepted by SMTP.
-        False -> email failed.
+    Email is the primary notification channel.
     """
 
     try:
@@ -257,10 +251,6 @@ async def _send_email_notification(
         )
 
         if user is None:
-            logger.error(
-                "EMAIL FAILED: reminder owner not found | reminder=%s",
-                reminder.id,
-            )
             return False
 
         recipient = str(
@@ -269,7 +259,7 @@ async def _send_email_notification(
 
         if not recipient:
             logger.error(
-                "EMAIL FAILED: user email is empty | reminder=%s",
+                "EMAIL FAILED: empty recipient | reminder=%s",
                 reminder.id,
             )
             return False
@@ -289,7 +279,8 @@ async def _send_email_notification(
         )
 
         logger.info(
-            "EMAIL SEND START | reminder=%s | to=%s | scheduled=%s",
+            "EMAIL SEND START | "
+            "reminder=%s | to=%s | scheduled=%s",
             reminder.id,
             recipient,
             scheduled_time,
@@ -305,14 +296,16 @@ async def _send_email_notification(
 
         if result:
             logger.info(
-                "EMAIL SUCCESS | reminder=%s | to=%s",
+                "EMAIL SUCCESS | "
+                "reminder=%s | to=%s",
                 reminder.id,
                 recipient,
             )
             return True
 
         logger.error(
-            "EMAIL FAILED | reminder=%s | to=%s",
+            "EMAIL FAILED | "
+            "reminder=%s | to=%s",
             reminder.id,
             recipient,
         )
@@ -328,18 +321,14 @@ async def _send_email_notification(
 
 
 # =============================================================================
-# Push notification
+# Push
 # =============================================================================
-
 
 async def _send_push_notification(
     reminder: Reminder,
 ) -> bool:
     """
-    Send web push notification.
-
-    Push is best-effort.
-    Email remains the primary delivery channel.
+    Push notification is best effort.
     """
 
     try:
@@ -370,18 +359,19 @@ async def _send_push_notification(
 
 
 # =============================================================================
-# APScheduler job helpers
+# Remove Reminder Job
 # =============================================================================
-
 
 def remove_reminder_job(
     reminder_id: str,
 ) -> None:
     """
-    Remove the scheduled APScheduler job for a reminder.
+    Remove the main reminder job.
     """
 
-    scheduler = _get_running_scheduler()
+    scheduler = (
+        _get_running_scheduler()
+    )
 
     if scheduler is None:
         return
@@ -407,19 +397,25 @@ def remove_reminder_job(
 
     except Exception:
         logger.exception(
-            "Failed removing reminder job | reminder=%s",
+            "FAILED REMOVING REMINDER JOB | reminder=%s",
             reminder_id,
         )
 
 
-def _remove_retry_job(
+# =============================================================================
+# Remove Retry Job
+# =============================================================================
+
+def remove_retry_job(
     reminder_id: str,
 ) -> None:
     """
-    Remove a pending retry job.
+    Remove pending email retry job.
     """
 
-    scheduler = _get_running_scheduler()
+    scheduler = (
+        _get_running_scheduler()
+    )
 
     if scheduler is None:
         return
@@ -438,39 +434,46 @@ def _remove_retry_job(
                 job_id
             )
 
-            logger.debug(
-                "REMINDER RETRY JOB REMOVED | reminder=%s",
+            logger.info(
+                "EMAIL RETRY JOB REMOVED | reminder=%s",
                 reminder_id,
             )
 
     except Exception:
         logger.exception(
-            "Failed removing retry job | reminder=%s",
+            "FAILED REMOVING RETRY JOB | reminder=%s",
             reminder_id,
         )
 
+
+# Backward-compatible private alias.
+def _remove_retry_job(
+    reminder_id: str,
+) -> None:
+    remove_retry_job(
+        reminder_id
+    )
+
+
+# =============================================================================
+# Schedule Reminder
+# =============================================================================
 
 def schedule_reminder(
     reminder: Reminder,
     run_at: datetime | None = None,
 ) -> bool:
     """
-    Schedule one reminder as an APScheduler date job.
-
-    Normal reminder:
-        run_at = scheduled_time_utc
-
-    Snoozed reminder:
-        run_at = snooze_until
-
-    If run_at is already in the past, execute approximately immediately.
+    Schedule a reminder at an exact UTC time.
     """
 
-    scheduler = _get_running_scheduler()
+    scheduler = (
+        _get_running_scheduler()
+    )
 
     if scheduler is None:
-        logger.warning(
-            "Cannot schedule reminder: APScheduler is not running | reminder=%s",
+        logger.error(
+            "SCHEDULE FAILED: scheduler not running | reminder=%s",
             reminder.id,
         )
         return False
@@ -487,7 +490,9 @@ def schedule_reminder(
         ):
             run_at = reminder.snooze_until
         else:
-            run_at = reminder.scheduled_time_utc
+            run_at = (
+                reminder.scheduled_time_utc
+            )
 
     run_at = _as_utc(
         run_at
@@ -514,13 +519,19 @@ def schedule_reminder(
             run_date=run_at,
             args=[reminder_id],
             id=job_id,
-            name=f"Reminder: {reminder.title}",
+            name=(
+                f"Reminder: "
+                f"{reminder.title}"
+            ),
             replace_existing=True,
-            misfire_grace_time=MISFIRE_GRACE_SECONDS,
+            misfire_grace_time=(
+                MISFIRE_GRACE_SECONDS
+            ),
         )
 
         logger.info(
-            "REMINDER JOB SCHEDULED | reminder=%s | run_at=%s | title=%s",
+            "REMINDER JOB SCHEDULED | "
+            "reminder=%s | run_at=%s | title=%s",
             reminder_id,
             run_at.isoformat(),
             reminder.title,
@@ -530,29 +541,30 @@ def schedule_reminder(
 
     except Exception:
         logger.exception(
-            "Failed scheduling reminder | reminder=%s",
+            "FAILED SCHEDULING REMINDER | reminder=%s",
             reminder_id,
         )
         return False
 
 
 # =============================================================================
-# Retry handling
+# Email Retry
 # =============================================================================
-
 
 def _schedule_email_retry(
     reminder: Reminder,
 ) -> bool:
     """
-    Schedule an email retry.
+    Schedule retry after email failure.
     """
 
-    scheduler = _get_running_scheduler()
+    scheduler = (
+        _get_running_scheduler()
+    )
 
     if scheduler is None:
         logger.error(
-            "Cannot schedule email retry: scheduler not running | reminder=%s",
+            "EMAIL RETRY FAILED: scheduler not running | reminder=%s",
             reminder.id,
         )
         return False
@@ -579,13 +591,19 @@ def _schedule_email_retry(
             run_date=retry_at,
             args=[reminder_id],
             id=job_id,
-            name=f"Email Retry: {reminder.title}",
+            name=(
+                f"Email Retry: "
+                f"{reminder.title}"
+            ),
             replace_existing=True,
-            misfire_grace_time=MISFIRE_GRACE_SECONDS,
+            misfire_grace_time=(
+                MISFIRE_GRACE_SECONDS
+            ),
         )
 
         logger.warning(
-            "EMAIL RETRY SCHEDULED | reminder=%s | retry_at=%s",
+            "EMAIL RETRY SCHEDULED | "
+            "reminder=%s | retry_at=%s",
             reminder_id,
             retry_at.isoformat(),
         )
@@ -594,7 +612,7 @@ def _schedule_email_retry(
 
     except Exception:
         logger.exception(
-            "Failed scheduling email retry | reminder=%s",
+            "FAILED SCHEDULING EMAIL RETRY | reminder=%s",
             reminder_id,
         )
         return False
@@ -604,7 +622,7 @@ async def _execute_email_retry_job(
     reminder_id: str,
 ) -> None:
     """
-    Retry a failed reminder email.
+    Retry failed email.
     """
 
     reminder = await _get_reminder_by_id(
@@ -618,24 +636,31 @@ async def _execute_email_retry_job(
         )
         return
 
-    if reminder.status not in {
-        ReminderStatus.PENDING,
-        ReminderStatus.SNOOZED,
-    }:
+    # IMPORTANT:
+    # Completed reminders are also allowed here because completing a
+    # reminder must never cancel its scheduled email.
+    if (
+        reminder.notification_sent_at
+        is not None
+    ):
         logger.info(
-            "EMAIL RETRY SKIPPED: reminder no longer active | reminder=%s | status=%s",
+            "EMAIL RETRY SKIPPED: already delivered | reminder=%s",
             reminder_id,
-            _enum_value(reminder.status),
         )
         return
 
     logger.info(
-        "EMAIL RETRY START | reminder=%s",
+        "EMAIL RETRY START | reminder=%s | status=%s",
         reminder_id,
+        _enum_value(
+            reminder.status
+        ),
     )
 
-    email_success = await _send_email_notification(
-        reminder
+    email_success = (
+        await _send_email_notification(
+            reminder
+        )
     )
 
     if not email_success:
@@ -655,15 +680,14 @@ async def _execute_email_retry_job(
 
 
 # =============================================================================
-# Database reminder lookup
+# Database Lookup
 # =============================================================================
-
 
 async def _get_reminder_by_id(
     reminder_id: str,
 ) -> Reminder | None:
     """
-    Load a reminder directly by MongoDB ObjectId.
+    Load reminder directly from MongoDB.
     """
 
     try:
@@ -671,7 +695,7 @@ async def _get_reminder_by_id(
             reminder_id
         ):
             logger.error(
-                "Invalid reminder ID | reminder=%s",
+                "INVALID REMINDER ID | reminder=%s",
                 reminder_id,
             )
             return None
@@ -683,24 +707,24 @@ async def _get_reminder_by_id(
 
     except Exception:
         logger.exception(
-            "Failed loading reminder | reminder=%s",
+            "FAILED LOADING REMINDER | reminder=%s",
             reminder_id,
         )
         return None
 
 
 # =============================================================================
-# Successful reminder processing
+# Finish Successful Reminder
 # =============================================================================
-
 
 async def _finish_successful_reminder(
     reminder: Reminder,
 ) -> None:
     """
-    Mark a reminder successfully processed.
+    Finish a successfully delivered reminder.
 
-    Recurring reminders are automatically re-armed.
+    For one-time completed reminders, preserve COMPLETED status.
+    For recurring reminders, re-arm the next occurrence.
     """
 
     try:
@@ -709,7 +733,7 @@ async def _finish_successful_reminder(
         )
 
         # ---------------------------------------------------------------------
-        # Recurring reminder
+        # Recurring
         # ---------------------------------------------------------------------
 
         if repeat_type != "never":
@@ -720,11 +744,6 @@ async def _finish_successful_reminder(
             )
 
             if next_occurrence is None:
-                logger.warning(
-                    "Recurring reminder has no next occurrence | reminder=%s",
-                    reminder.id,
-                )
-
                 reminder.status = (
                     ReminderStatus.SENT
                 )
@@ -753,16 +772,13 @@ async def _finish_successful_reminder(
             reminder.snooze_until = None
             reminder.completed_at = None
 
-            if hasattr(
-                reminder,
-                "update_timestamp",
-            ):
-                reminder.update_timestamp()
+            reminder.update_timestamp()
 
             await reminder.save()
 
             logger.info(
-                "RECURRING REMINDER REARMED | reminder=%s | next=%s",
+                "RECURRING REMINDER REARMED | "
+                "reminder=%s | next=%s",
                 reminder.id,
                 reminder.scheduled_time_utc.isoformat(),
             )
@@ -778,51 +794,63 @@ async def _finish_successful_reminder(
         # One-time reminder
         # ---------------------------------------------------------------------
 
-        reminder.status = (
-            ReminderStatus.SENT
-        )
-
         reminder.notification_sent_at = (
             datetime.now(timezone.utc)
         )
 
         reminder.snooze_until = None
 
-        if hasattr(
-            reminder,
-            "update_timestamp",
+        # IMPORTANT:
+        # If user already completed the reminder, preserve COMPLETED.
+        #
+        # Otherwise mark it SENT.
+        if (
+            reminder.status
+            != ReminderStatus.COMPLETED
         ):
-            reminder.update_timestamp()
+            reminder.status = (
+                ReminderStatus.SENT
+            )
+
+        reminder.update_timestamp()
 
         await reminder.save()
 
         logger.info(
-            "REMINDER MARKED SENT | reminder=%s | title=%s",
+            "REMINDER EMAIL DELIVERY FINISHED | "
+            "reminder=%s | final_status=%s",
             reminder.id,
-            reminder.title,
+            _enum_value(
+                reminder.status
+            ),
         )
 
     except Exception:
         logger.exception(
-            "Failed finishing successful reminder | reminder=%s",
+            "FAILED FINISHING REMINDER | reminder=%s",
             reminder.id,
         )
 
 
 # =============================================================================
-# Main reminder execution
+# Main Reminder Job
 # =============================================================================
-
 
 async def _execute_reminder_job(
     reminder_id: str,
 ) -> None:
     """
-    Execute an individual scheduled reminder.
+    Execute a scheduled reminder.
+
+    Email is always attempted when notification_sent_at is None,
+    including when the user previously marked the reminder COMPLETED.
     """
 
     async with _processing_lock:
-        if reminder_id in _processing_reminders:
+        if (
+            reminder_id
+            in _processing_reminders
+        ):
             logger.warning(
                 "REMINDER ALREADY PROCESSING | reminder=%s",
                 reminder_id,
@@ -839,33 +867,56 @@ async def _execute_reminder_job(
             reminder_id,
         )
 
-        reminder = await _get_reminder_by_id(
-            reminder_id
+        reminder = (
+            await _get_reminder_by_id(
+                reminder_id
+            )
         )
 
         if reminder is None:
             logger.error(
-                "REMINDER JOB ABORTED: reminder not found | reminder=%s",
+                "REMINDER JOB ABORTED: not found | reminder=%s",
                 reminder_id,
             )
             return
 
         # ---------------------------------------------------------------------
-        # Check status
+        # Already delivered
         # ---------------------------------------------------------------------
 
-        # IMPORTANT:
-        # COMPLETED is intentionally NOT included here.
+        if (
+            reminder.notification_sent_at
+            is not None
+        ):
+            logger.info(
+                "REMINDER JOB SKIPPED: email already delivered | reminder=%s",
+                reminder_id,
+            )
+            return
+
+        # ---------------------------------------------------------------------
+        # IMPORTANT STATUS RULE
         #
-        # A completed reminder that still has a scheduled email must be
-        # allowed to send that email.
-        if reminder.status not in {
+        # PENDING       -> send
+        # SNOOZED       -> send when snooze time arrives
+        # COMPLETED     -> STILL SEND
+        #
+        # CANCELLED/SENT/FAILED -> do not send
+        # ---------------------------------------------------------------------
+
+        allowed_statuses = {
             ReminderStatus.PENDING,
             ReminderStatus.SNOOZED,
             ReminderStatus.COMPLETED,
-        }:
+        }
+
+        if (
+            reminder.status
+            not in allowed_statuses
+        ):
             logger.info(
-                "REMINDER JOB SKIPPED | reminder=%s | status=%s",
+                "REMINDER JOB SKIPPED | "
+                "reminder=%s | status=%s",
                 reminder.id,
                 _enum_value(
                     reminder.status
@@ -874,7 +925,7 @@ async def _execute_reminder_job(
             return
 
         # ---------------------------------------------------------------------
-        # Snooze handling
+        # Snooze
         # ---------------------------------------------------------------------
 
         if (
@@ -892,7 +943,8 @@ async def _execute_reminder_job(
 
             if snooze_until > now:
                 logger.info(
-                    "REMINDER STILL SNOOZED | reminder=%s | snooze_until=%s",
+                    "REMINDER STILL SNOOZED | "
+                    "reminder=%s | until=%s",
                     reminder.id,
                     snooze_until.isoformat(),
                 )
@@ -905,28 +957,32 @@ async def _execute_reminder_job(
                 return
 
         # ---------------------------------------------------------------------
-        # Remove old jobs
+        # Remove current/retry jobs
         # ---------------------------------------------------------------------
 
         remove_reminder_job(
             reminder_id
         )
 
-        _remove_retry_job(
+        remove_retry_job(
             reminder_id
         )
 
         logger.info(
-            "REMINDER DUE | reminder=%s | title=%s | scheduled=%s",
+            "REMINDER DUE | "
+            "reminder=%s | title=%s | scheduled=%s | status=%s",
             reminder.id,
             reminder.title,
             _as_utc(
                 reminder.scheduled_time_utc
             ).isoformat(),
+            _enum_value(
+                reminder.status
+            ),
         )
 
         # ---------------------------------------------------------------------
-        # Email FIRST
+        # EMAIL FIRST
         # ---------------------------------------------------------------------
 
         email_success = (
@@ -941,20 +997,22 @@ async def _execute_reminder_job(
 
         if not email_success:
             logger.error(
-                "REMINDER EMAIL FAILED | reminder=%s | keeping reminder PENDING",
+                "REMINDER EMAIL FAILED | "
+                "reminder=%s | scheduling retry",
                 reminder.id,
             )
 
-            # Do NOT mark SENT if email failed.
-            reminder.status = (
-                ReminderStatus.PENDING
-            )
-
-            if hasattr(
-                reminder,
-                "update_timestamp",
+            # Keep original COMPLETED state if user had completed it.
+            # Otherwise keep PENDING.
+            if (
+                reminder.status
+                != ReminderStatus.COMPLETED
             ):
-                reminder.update_timestamp()
+                reminder.status = (
+                    ReminderStatus.PENDING
+                )
+
+            reminder.update_timestamp()
 
             await reminder.save()
 
@@ -965,7 +1023,7 @@ async def _execute_reminder_job(
             return
 
         # ---------------------------------------------------------------------
-        # Email succeeded
+        # Email success
         # ---------------------------------------------------------------------
 
         logger.info(
@@ -984,14 +1042,15 @@ async def _execute_reminder_job(
         )
 
         logger.info(
-            "NOTIFICATION RESULT | reminder=%s | email=%s | push=%s",
+            "NOTIFICATION RESULT | "
+            "reminder=%s | email=%s | push=%s",
             reminder.id,
             email_success,
             push_success,
         )
 
         # ---------------------------------------------------------------------
-        # Mark successful / recurring
+        # Finish
         # ---------------------------------------------------------------------
 
         await _finish_successful_reminder(
@@ -1015,23 +1074,21 @@ async def _execute_reminder_job(
 
 
 # =============================================================================
-# Recovery
+# Restore Jobs
 # =============================================================================
-
 
 async def restore_reminder_jobs() -> None:
     """
-    Restore all pending/snoozed reminder jobs from MongoDB.
-
-    APScheduler jobs are in memory, so they must be recreated after
-    application restart.
+    Restore all active reminders from MongoDB.
     """
 
-    scheduler = _get_running_scheduler()
+    scheduler = (
+        _get_running_scheduler()
+    )
 
     if scheduler is None:
         logger.warning(
-            "Cannot restore reminder jobs: scheduler is not running"
+            "RESTORE SKIPPED: scheduler not running"
         )
         return
 
@@ -1046,13 +1103,33 @@ async def restore_reminder_jobs() -> None:
             == ReminderStatus.SNOOZED
         ).to_list()
 
+        # IMPORTANT:
+        # Completed reminders with no delivered email also need restoring.
+        completed = await Reminder.find(
+            Reminder.status
+            == ReminderStatus.COMPLETED
+        ).to_list()
+
+        completed = [
+            reminder
+            for reminder in completed
+            if reminder.notification_sent_at
+            is None
+        ]
+
         reminders = (
             pending
             + snoozed
+            + completed
         )
 
         logger.info(
-            "RESTORE REMINDER JOBS | found=%d",
+            "RESTORE REMINDER JOBS | "
+            "pending=%d | snoozed=%d | "
+            "completed_pending_email=%d | total=%d",
+            len(pending),
+            len(snoozed),
+            len(completed),
             len(reminders),
         )
 
@@ -1060,6 +1137,19 @@ async def restore_reminder_jobs() -> None:
 
         for reminder in reminders:
             try:
+                reminder_id = str(
+                    reminder.id
+                )
+
+                job_id = _reminder_job_id(
+                    reminder_id
+                )
+
+                if scheduler.get_job(
+                    job_id
+                ) is not None:
+                    continue
+
                 if (
                     reminder.status
                     == ReminderStatus.SNOOZED
@@ -1069,8 +1159,9 @@ async def restore_reminder_jobs() -> None:
                         is None
                     ):
                         logger.warning(
-                            "Skipping invalid snoozed reminder | reminder=%s",
-                            reminder.id,
+                            "INVALID SNOOZED REMINDER | "
+                            "reminder=%s",
+                            reminder_id,
                         )
                         continue
 
@@ -1091,12 +1182,13 @@ async def restore_reminder_jobs() -> None:
 
             except Exception:
                 logger.exception(
-                    "Failed restoring reminder job | reminder=%s",
+                    "FAILED RESTORING REMINDER | reminder=%s",
                     reminder.id,
                 )
 
         logger.info(
-            "RESTORE REMINDER JOBS COMPLETE | scheduled=%d | total=%d",
+            "RESTORE REMINDER JOBS COMPLETE | "
+            "scheduled=%d | total=%d",
             scheduled_count,
             len(reminders),
         )
@@ -1106,25 +1198,32 @@ async def restore_reminder_jobs() -> None:
 
     except Exception:
         logger.exception(
-            "Failed restoring reminder jobs"
+            "RESTORE REMINDER JOBS FAILED"
         )
 
 
 # =============================================================================
-# Recovery scan
+# Recovery Scan
 # =============================================================================
-
 
 async def _recovery_scan() -> None:
     """
-    Safety-net scan.
+    MongoDB safety-net.
 
-    If an active reminder has no APScheduler job, recreate it.
+    If a reminder exists in MongoDB but its APScheduler job is missing,
+    recreate the job.
+
+    If the reminder is already overdue, execute it immediately.
     """
 
-    scheduler = _get_running_scheduler()
+    scheduler = (
+        _get_running_scheduler()
+    )
 
     if scheduler is None:
+        logger.warning(
+            "RECOVERY SKIPPED: scheduler not running"
+        )
         return
 
     try:
@@ -1138,19 +1237,41 @@ async def _recovery_scan() -> None:
             == ReminderStatus.SNOOZED
         ).to_list()
 
+        completed = await Reminder.find(
+            Reminder.status
+            == ReminderStatus.COMPLETED
+        ).to_list()
+
+        completed = [
+            reminder
+            for reminder in completed
+            if reminder.notification_sent_at
+            is None
+        ]
+
         reminders = (
             pending
             + snoozed
+            + completed
         )
 
-        if not reminders:
-            return
+        logger.info(
+            "RECOVERY SCAN | "
+            "pending=%d | snoozed=%d | "
+            "completed_pending_email=%d | total=%d",
+            len(pending),
+            len(snoozed),
+            len(completed),
+            len(reminders),
+        )
 
         now = datetime.now(
             timezone.utc
         )
 
         restored = 0
+        existing = 0
+        overdue = 0
 
         for reminder in reminders:
             try:
@@ -1162,14 +1283,15 @@ async def _recovery_scan() -> None:
                     reminder_id
                 )
 
-                existing_job = (
-                    scheduler.get_job(
-                        job_id
-                    )
-                )
-
-                if existing_job is not None:
+                if scheduler.get_job(
+                    job_id
+                ) is not None:
+                    existing += 1
                     continue
+
+                # -------------------------------------------------------------
+                # Determine execution time
+                # -------------------------------------------------------------
 
                 if (
                     reminder.status
@@ -1179,6 +1301,11 @@ async def _recovery_scan() -> None:
                         reminder.snooze_until
                         is None
                     ):
+                        logger.warning(
+                            "RECOVERY INVALID SNOOZE | "
+                            "reminder=%s",
+                            reminder_id,
+                        )
                         continue
 
                     run_at = _as_utc(
@@ -1190,12 +1317,29 @@ async def _recovery_scan() -> None:
                         reminder.scheduled_time_utc
                     )
 
-                # Do not send directly here.
-                # schedule_reminder() will execute it.
+                # -------------------------------------------------------------
+                # Overdue
+                # -------------------------------------------------------------
+
                 if run_at <= now:
-                    run_at = now + timedelta(
-                        seconds=1
+                    overdue += 1
+
+                    logger.warning(
+                        "RECOVERY FOUND OVERDUE REMINDER | "
+                        "reminder=%s | scheduled=%s | now=%s",
+                        reminder_id,
+                        run_at.isoformat(),
+                        now.isoformat(),
                     )
+
+                    run_at = (
+                        now
+                        + timedelta(seconds=1)
+                    )
+
+                # -------------------------------------------------------------
+                # Restore
+                # -------------------------------------------------------------
 
                 if schedule_reminder(
                     reminder,
@@ -1205,137 +1349,142 @@ async def _recovery_scan() -> None:
 
             except Exception:
                 logger.exception(
-                    "Recovery failed for reminder | reminder=%s",
+                    "RECOVERY FAILED FOR REMINDER | "
+                    "reminder=%s",
                     reminder.id,
                 )
 
-        if restored:
-            logger.warning(
-                "RECOVERY RESTORED JOBS | count=%d",
-                restored,
-            )
+        logger.info(
+            "RECOVERY COMPLETE | "
+            "total=%d | existing=%d | "
+            "restored=%d | overdue=%d",
+            len(reminders),
+            existing,
+            restored,
+            overdue,
+        )
 
     except asyncio.CancelledError:
         raise
 
     except Exception:
         logger.exception(
-            "Recovery scan failed"
+            "RECOVERY SCAN FAILED"
         )
 
 
 # =============================================================================
-# Scheduler lifecycle
+# Scheduler Startup
 # =============================================================================
-
 
 def start_scheduler() -> None:
     """
-    Start APScheduler and restore reminder jobs.
+    Start APScheduler.
     """
 
     global _scheduler
 
-    if _get_running_scheduler() is not None:
+    if (
+        _scheduler is not None
+        and _scheduler.running
+    ):
         logger.info(
-            "APScheduler already running."
+            "APScheduler already running"
         )
         return
 
-    logger.info(
-        "Starting Timora APScheduler..."
+    _scheduler = AsyncIOScheduler(
+        timezone="UTC",
+        job_defaults={
+            "coalesce": True,
+            "max_instances": 1,
+            "misfire_grace_time": (
+                MISFIRE_GRACE_SECONDS
+            ),
+        },
     )
 
-    scheduler = AsyncIOScheduler(
-        timezone="UTC"
-    )
-
-    scheduler.add_job(
+    _scheduler.add_job(
         _recovery_scan,
         trigger="interval",
         seconds=RECOVERY_INTERVAL_SECONDS,
-        id="timora-recovery-scan",
-        name="Timora reminder recovery scan",
+        id="timora-reminder-recovery",
+        name="Timora Reminder Recovery",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=(
+            MISFIRE_GRACE_SECONDS
+        ),
     )
 
-    scheduler.start()
-
-    _scheduler = scheduler
+    _scheduler.start()
 
     logger.info(
-        "Timora APScheduler started successfully."
+        "APScheduler STARTED | "
+        "timezone=UTC | recovery_interval=%ss",
+        RECOVERY_INTERVAL_SECONDS,
     )
 
-    # Restore existing MongoDB reminders after scheduler startup.
     try:
         loop = asyncio.get_running_loop()
+
         loop.create_task(
             restore_reminder_jobs()
         )
+
+        logger.info(
+            "REMINDER RESTORE TASK STARTED"
+        )
+
     except RuntimeError:
-        logger.warning(
-            "No running event loop available for reminder restoration."
+        logger.exception(
+            "FAILED STARTING RESTORE TASK: "
+            "no running event loop"
         )
 
 
+# =============================================================================
+# Scheduler Shutdown
+# =============================================================================
+
 def stop_scheduler() -> None:
     """
-    Stop APScheduler.
+    Stop APScheduler gracefully.
     """
 
     global _scheduler
 
-    scheduler = _scheduler
-
-    if scheduler is None:
+    if _scheduler is None:
         return
 
     try:
-        if scheduler.running:
-            scheduler.shutdown(
+        if _scheduler.running:
+            _scheduler.shutdown(
                 wait=False
             )
 
             logger.info(
-                "Timora APScheduler stopped."
+                "APScheduler STOPPED"
             )
 
     except Exception:
         logger.exception(
-            "Failed stopping APScheduler"
+            "FAILED STOPPING APSCHEDULER"
         )
 
     finally:
         _scheduler = None
-
         _processing_reminders.clear()
 
 
+# =============================================================================
+# Utility
+# =============================================================================
+
 def get_scheduler() -> AsyncIOScheduler | None:
     """
-    Return the current scheduler instance.
+    Return active scheduler.
     """
 
     return _scheduler
-
-
-# =============================================================================
-# Compatibility / recovery entry point
-# =============================================================================
-
-
-async def _process_due_reminders() -> None:
-    """
-    Compatibility entry point.
-
-    Older Celery/worker code may import this function.
-
-    The primary delivery mechanism is now individual APScheduler date jobs.
-    This function only performs the recovery scan and does not duplicate
-    normal reminder delivery.
-    """
-
-    await _recovery_scan()

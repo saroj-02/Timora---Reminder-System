@@ -21,9 +21,8 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# Configuration helpers
+# Configuration Helpers
 # =============================================================================
-
 
 def _clean(
     value: object,
@@ -42,10 +41,15 @@ def _clean_password(
     value: object,
 ) -> str:
     """
-    Clean a Gmail App Password.
+    Remove spaces from Gmail App Passwords.
 
-    Gmail may display an App Password with spaces.
-    Spaces are removed before SMTP authentication.
+    Example:
+
+        abcd efgh ijkl mnop
+
+    becomes:
+
+        abcdefghijklmnop
     """
 
     return "".join(
@@ -55,7 +59,8 @@ def _clean_password(
 
 def smtp_configuration_status() -> dict[str, object]:
     """
-    Return SMTP configuration status without exposing the password.
+    Return SMTP configuration status
+    without exposing the password.
     """
 
     host = _clean(
@@ -97,9 +102,8 @@ def smtp_configuration_status() -> dict[str, object]:
 
 
 # =============================================================================
-# SMTP send
+# SMTP Send
 # =============================================================================
-
 
 def _send_email(
     recipient: str,
@@ -136,7 +140,9 @@ def _send_email(
         or "Timora"
     )
 
-    recipient = recipient.strip()
+    recipient = (
+        recipient.strip()
+    )
 
     # -------------------------------------------------------------------------
     # Configuration validation
@@ -172,12 +178,17 @@ def _send_email(
         )
         return False
 
+    # -------------------------------------------------------------------------
+    # Safe configuration logging
+    # -------------------------------------------------------------------------
+
     logger.info(
-        "SMTP configuration: host=%s port=%s "
-        "username_configured=%s "
-        "password_configured=%s "
-        "password_length=%s "
-        "from_email=%s TLS=%s",
+        "SMTP CONFIG | "
+        "host=%s | port=%s | "
+        "username_configured=%s | "
+        "password_configured=%s | "
+        "password_length=%s | "
+        "from_email=%s | TLS=%s",
         host,
         settings.SMTP_PORT,
         bool(username),
@@ -187,11 +198,14 @@ def _send_email(
         settings.SMTP_USE_TLS,
     )
 
-    # Gmail App Passwords are normally 16 characters.
-    if host.lower() == "smtp.gmail.com":
+    if (
+        host.lower()
+        == "smtp.gmail.com"
+    ):
         if len(password) != 16:
             logger.warning(
-                "Gmail App Password length is %s after removing spaces.",
+                "Gmail App Password length=%s after removing spaces. "
+                "Expected 16 characters.",
                 len(password),
             )
 
@@ -209,13 +223,16 @@ def _send_email(
     )
 
     message["To"] = recipient
+
     message["Subject"] = subject
 
     message.set_content(
         body
     )
 
-    context = ssl.create_default_context()
+    context = (
+        ssl.create_default_context()
+    )
 
     # -------------------------------------------------------------------------
     # SMTP delivery
@@ -223,7 +240,8 @@ def _send_email(
 
     try:
         logger.info(
-            "Connecting to SMTP server %s:%s...",
+            "SMTP CONNECT START | "
+            "host=%s | port=%s",
             host,
             settings.SMTP_PORT,
         )
@@ -238,7 +256,7 @@ def _send_email(
 
             if settings.SMTP_USE_TLS:
                 logger.info(
-                    "Starting SMTP TLS..."
+                    "SMTP TLS START"
                 )
 
                 server.starttls(
@@ -248,7 +266,7 @@ def _send_email(
                 server.ehlo()
 
             logger.info(
-                "Authenticating SMTP user %s...",
+                "SMTP AUTH START | username=%s",
                 username,
             )
 
@@ -258,7 +276,7 @@ def _send_email(
             )
 
             logger.info(
-                "SMTP authentication successful."
+                "SMTP AUTH SUCCESS"
             )
 
             server.send_message(
@@ -266,7 +284,7 @@ def _send_email(
             )
 
         logger.info(
-            "EMAIL SUCCESS: reminder email sent to %s",
+            "EMAIL SUCCESS | recipient=%s",
             recipient,
         )
 
@@ -274,8 +292,8 @@ def _send_email(
 
     except smtplib.SMTPAuthenticationError as exc:
         logger.error(
-            "EMAIL FAILED: Gmail/SMTP authentication was rejected. "
-            "Code=%s error=%s",
+            "EMAIL FAILED: SMTP authentication rejected | "
+            "code=%s | error=%s",
             exc.smtp_code,
             exc.smtp_error,
         )
@@ -283,8 +301,8 @@ def _send_email(
 
     except smtplib.SMTPConnectError as exc:
         logger.error(
-            "EMAIL FAILED: unable to connect to SMTP server. "
-            "Code=%s error=%s",
+            "EMAIL FAILED: SMTP connection rejected | "
+            "code=%s | error=%s",
             exc.smtp_code,
             exc.smtp_error,
         )
@@ -302,10 +320,7 @@ def _send_email(
         )
         return False
 
-    except (
-        TimeoutError,
-        OSError,
-    ):
+    except (TimeoutError, OSError):
         logger.exception(
             "EMAIL FAILED: SMTP network/timeout error."
         )
@@ -313,15 +328,14 @@ def _send_email(
 
     except Exception:
         logger.exception(
-            "EMAIL FAILED: unexpected error."
+            "EMAIL FAILED: unexpected SMTP error."
         )
         return False
 
 
 # =============================================================================
-# Public reminder email
+# Public API
 # =============================================================================
-
 
 async def send_reminder_email(
     recipient: str,

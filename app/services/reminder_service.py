@@ -49,13 +49,12 @@ logger = logging.getLogger(__name__)
 # Create
 # =============================================================================
 
-
 async def create_reminder(
     user: User,
     body: ReminderCreateRequest,
 ) -> Reminder:
     """
-    Create a reminder and immediately register its scheduler job.
+    Create a reminder in MongoDB and immediately register its scheduler job.
     """
 
     utc_time = local_to_utc(
@@ -67,6 +66,17 @@ async def create_reminder(
         raise ValueError(
             "The selected time has already passed."
         )
+
+    logger.info(
+        "CREATE REMINDER REQUEST | "
+        "user=%s | title=%s | timezone=%s | "
+        "local_datetime=%s | utc_time=%s",
+        user.id,
+        body.title,
+        body.timezone,
+        body.local_datetime,
+        utc_time.isoformat(),
+    )
 
     reminder = Reminder(
         user_id=str(user.id),
@@ -84,16 +94,15 @@ async def create_reminder(
     await reminder.insert()
 
     logger.info(
-        "Created reminder | reminder=%s | user=%s | scheduled=%s",
+        "REMINDER STORED IN MONGODB | "
+        "reminder=%s | user=%s | scheduled_utc=%s",
         reminder.id,
         user.id,
         utc_time.isoformat(),
     )
 
-    # Local import prevents circular import:
-    #
-    # scheduler_service imports compute_next_occurrence()
-    # from this module.
+    # Local import prevents circular import because scheduler_service
+    # imports compute_next_occurrence from this module.
     from app.services.scheduler_service import schedule_reminder
 
     scheduled = schedule_reminder(
@@ -101,9 +110,17 @@ async def create_reminder(
         utc_time,
     )
 
+    logger.info(
+        "REMINDER SCHEDULER RESULT | "
+        "reminder=%s | scheduled=%s",
+        reminder.id,
+        scheduled,
+    )
+
     if not scheduled:
-        logger.warning(
-            "Reminder created but scheduler job could not be registered | reminder=%s",
+        logger.error(
+            "REMINDER CREATED BUT NOT SCHEDULED | "
+            "reminder=%s",
             reminder.id,
         )
 
@@ -113,7 +130,6 @@ async def create_reminder(
 # =============================================================================
 # Get
 # =============================================================================
-
 
 async def get_reminder(
     reminder_id: str,
@@ -138,7 +154,6 @@ async def get_reminder(
 # List
 # =============================================================================
 
-
 async def list_reminders(
     user_id: str,
     status_filter: Optional[list[str]] = None,
@@ -158,8 +173,6 @@ async def list_reminders(
     List reminders for a user.
     """
 
-    # Any is intentional here because Beanie's operator objects are
-    # not consistently typed across versions.
     conditions: list[Any] = [
         Reminder.user_id == user_id
     ]
@@ -209,10 +222,7 @@ async def list_reminders(
 
     total = await query.count()
 
-    sort_map: dict[
-        str,
-        list[tuple[str, int]],
-    ] = {
+    sort_map = {
         "nearest": [
             ("scheduled_time_utc", 1)
         ],
@@ -235,7 +245,6 @@ async def list_reminders(
         ],
     )
 
-    # Beanie/PyMongo typing differs between versions.
     query = (
         query
         .sort(cast(Any, sort_fields))
@@ -252,25 +261,22 @@ async def list_reminders(
 # Update
 # =============================================================================
 
-
 async def update_reminder(
     reminder: Reminder,
     body: ReminderUpdateRequest,
 ) -> Reminder:
     """
-    Update a reminder and reschedule its APScheduler job.
+    Update a reminder and re-register its scheduler job.
     """
 
-    reminder_id = str(
-        reminder.id
-    )
+    reminder_id = str(reminder.id)
 
     from app.services.scheduler_service import (
         remove_reminder_job,
         schedule_reminder,
     )
 
-    # Remove the previous scheduled job first.
+    # Remove old job first.
     remove_reminder_job(
         reminder_id
     )
@@ -321,7 +327,7 @@ async def update_reminder(
         reminder.timezone = body.timezone
 
     # -------------------------------------------------------------------------
-    # Re-arm reminder
+    # Re-arm
     # -------------------------------------------------------------------------
 
     reminder.status = ReminderStatus.PENDING
@@ -333,26 +339,31 @@ async def update_reminder(
 
     await reminder.save()
 
-    # -------------------------------------------------------------------------
-    # Register new scheduler job
-    # -------------------------------------------------------------------------
+    logger.info(
+        "REMINDER UPDATED IN MONGODB | "
+        "reminder=%s | scheduled=%s",
+        reminder.id,
+        reminder.scheduled_time_utc.isoformat(),
+    )
 
     scheduled = schedule_reminder(
         reminder,
         reminder.scheduled_time_utc,
     )
 
+    logger.info(
+        "REMINDER UPDATE SCHEDULER RESULT | "
+        "reminder=%s | scheduled=%s",
+        reminder.id,
+        scheduled,
+    )
+
     if not scheduled:
-        logger.warning(
-            "Reminder updated but scheduler job could not be registered | reminder=%s",
+        logger.error(
+            "REMINDER UPDATED BUT NOT SCHEDULED | "
+            "reminder=%s",
             reminder.id,
         )
-
-    logger.info(
-        "Reminder updated | reminder=%s | scheduled=%s",
-        reminder.id,
-        reminder.scheduled_time_utc.isoformat(),
-    )
 
     return reminder
 
@@ -361,12 +372,11 @@ async def update_reminder(
 # Delete
 # =============================================================================
 
-
 async def delete_reminder(
     reminder: Reminder,
 ) -> None:
     """
-    Delete reminder and remove its scheduler jobs.
+    Delete a reminder and remove its scheduled jobs.
     """
 
     reminder_id = str(
@@ -375,16 +385,21 @@ async def delete_reminder(
 
     from app.services.scheduler_service import (
         remove_reminder_job,
+        remove_retry_job,
     )
 
     remove_reminder_job(
         reminder_id
     )
 
+    remove_retry_job(
+        reminder_id
+    )
+
     await reminder.delete()
 
     logger.info(
-        "Reminder deleted | reminder=%s",
+        "REMINDER DELETED | reminder=%s",
         reminder_id,
     )
 
@@ -393,18 +408,17 @@ async def delete_reminder(
 # Complete
 # =============================================================================
 
-
 async def complete_reminder(
     reminder: Reminder,
 ) -> Reminder:
     """
-    Mark a reminder completed.
+    Mark reminder completed.
 
     IMPORTANT:
-    Completing a reminder does NOT remove its future scheduled email job.
+    Completing a reminder MUST NOT cancel its scheduled email.
 
-    This intentionally preserves the application's required behavior:
-    user interaction must not silently cancel scheduled email delivery.
+    The scheduler job remains active. The scheduler is allowed to process
+    COMPLETED reminders as long as notification_sent_at is still None.
     """
 
     reminder.status = ReminderStatus.COMPLETED
@@ -416,7 +430,8 @@ async def complete_reminder(
     await reminder.save()
 
     logger.info(
-        "Reminder completed | reminder=%s",
+        "REMINDER COMPLETED | "
+        "reminder=%s | email_job_preserved=true",
         reminder.id,
     )
 
@@ -427,13 +442,12 @@ async def complete_reminder(
 # Snooze
 # =============================================================================
 
-
 async def snooze_reminder(
     reminder: Reminder,
     minutes: int,
 ) -> Reminder:
     """
-    Snooze a reminder and create a scheduler job for the snooze time.
+    Snooze a reminder and schedule it for the snooze time.
     """
 
     if minutes <= 0:
@@ -472,18 +486,21 @@ async def snooze_reminder(
         snooze_until,
     )
 
-    if not scheduled:
-        logger.warning(
-            "Reminder snoozed but scheduler job could not be registered | reminder=%s",
-            reminder.id,
-        )
-
     logger.info(
-        "Reminder snoozed | reminder=%s | minutes=%s | until=%s",
+        "REMINDER SNOOZED | "
+        "reminder=%s | minutes=%s | until=%s | scheduled=%s",
         reminder.id,
         minutes,
         snooze_until.isoformat(),
+        scheduled,
     )
+
+    if not scheduled:
+        logger.error(
+            "REMINDER SNOOZED BUT NOT SCHEDULED | "
+            "reminder=%s",
+            reminder.id,
+        )
 
     return reminder
 
@@ -491,7 +508,6 @@ async def snooze_reminder(
 # =============================================================================
 # Reschedule
 # =============================================================================
-
 
 async def reschedule_reminder(
     reminder: Reminder,
@@ -543,35 +559,33 @@ async def reschedule_reminder(
         utc_time,
     )
 
-    if not scheduled:
-        logger.warning(
-            "Reminder rescheduled but scheduler job could not be registered | reminder=%s",
-            reminder.id,
-        )
-
     logger.info(
-        "Reminder rescheduled | reminder=%s | scheduled=%s",
+        "REMINDER RESCHEDULED | "
+        "reminder=%s | utc=%s | scheduled=%s",
         reminder.id,
         utc_time.isoformat(),
+        scheduled,
     )
+
+    if not scheduled:
+        logger.error(
+            "REMINDER RESCHEDULED BUT NOT SCHEDULED | "
+            "reminder=%s",
+            reminder.id,
+        )
 
     return reminder
 
 
 # =============================================================================
-# Recurring logic
+# Recurring Logic
 # =============================================================================
-
 
 def compute_next_occurrence(
     reminder: Reminder,
 ) -> Optional[datetime]:
     """
-    Calculate the next UTC occurrence of a recurring reminder.
-
-    Returns:
-        None for non-recurring reminders.
-        UTC datetime for recurring reminders.
+    Calculate next UTC occurrence for recurring reminders.
     """
 
     if reminder.repeat_type == RepeatType.NEVER:
@@ -583,11 +597,15 @@ def compute_next_occurrence(
         )
     except Exception:
         logger.warning(
-            "Invalid reminder timezone, using UTC | reminder=%s | timezone=%s",
+            "Invalid timezone, using UTC | "
+            "reminder=%s | timezone=%s",
             reminder.id,
             reminder.timezone,
         )
-        reminder_timezone = ZoneInfo("UTC")
+
+        reminder_timezone = ZoneInfo(
+            "UTC"
+        )
 
     base_local = (
         reminder.scheduled_time_utc
@@ -618,7 +636,8 @@ def compute_next_occurrence(
 
     elif (
         hasattr(RepeatType, "WEEKDAYS")
-        and reminder.repeat_type == RepeatType.WEEKDAYS
+        and reminder.repeat_type
+        == RepeatType.WEEKDAYS
     ):
         next_local = (
             base_local
@@ -703,7 +722,6 @@ def compute_next_occurrence(
                 year=next_year
             )
         except ValueError:
-            # February 29 -> February 28.
             next_local = base_local.replace(
                 year=next_year,
                 month=2,
@@ -735,9 +753,8 @@ def compute_next_occurrence(
 
 
 # =============================================================================
-# Response formatter
+# Response Formatter
 # =============================================================================
-
 
 def to_response(
     reminder: Reminder,
