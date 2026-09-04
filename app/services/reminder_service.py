@@ -107,7 +107,6 @@ async def create_reminder(
 
     scheduled = schedule_reminder(
         reminder,
-        utc_time,
     )
 
     logger.info(
@@ -348,7 +347,6 @@ async def update_reminder(
 
     scheduled = schedule_reminder(
         reminder,
-        reminder.scheduled_time_utc,
     )
 
     logger.info(
@@ -781,20 +779,20 @@ def to_response(
         title=reminder.title,
         description=reminder.description,
         category=(
-            reminder.category.value
+            reminder.category.value.capitalize()
             if hasattr(
                 reminder.category,
                 "value",
             )
-            else reminder.category
+            else str(reminder.category).capitalize()
         ),
         priority=(
-            reminder.priority.value
+            reminder.priority.value.capitalize()
             if hasattr(
                 reminder.priority,
                 "value",
             )
-            else reminder.priority
+            else str(reminder.priority).capitalize()
         ),
         scheduled_time_utc=reminder.scheduled_time_utc,
         local_datetime_str=local_str,

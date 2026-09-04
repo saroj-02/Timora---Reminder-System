@@ -376,7 +376,7 @@ def local_to_utc(
         )
 
     return local_datetime.astimezone(
-        timezone.utc
+        ZoneInfo("UTC")
     )
 
 

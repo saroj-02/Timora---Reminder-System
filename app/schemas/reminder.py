@@ -4,7 +4,7 @@ Timora – Reminder Schemas (Pydantic)
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.reminder import (
     ReminderBefore,
@@ -14,6 +14,70 @@ from app.models.reminder import (
     RepeatType,
 )
 from app.utils.timezone import now_utc
+
+def _parse_category(value: object) -> ReminderCategory:
+    if isinstance(value, ReminderCategory):
+        return value
+    val = str(value or "").strip().lower()
+    cat_map = {
+        "personal": ReminderCategory.PERSONAL,
+        "work": ReminderCategory.WORK,
+        "study": ReminderCategory.STUDY,
+        "health": ReminderCategory.HEALTH,
+        "finance": ReminderCategory.FINANCE,
+        "other": ReminderCategory.OTHER,
+    }
+    return cat_map.get(val, ReminderCategory.OTHER)
+
+
+def _parse_priority(value: object) -> ReminderPriority:
+    if isinstance(value, ReminderPriority):
+        return value
+    val = str(value or "").strip().lower()
+    prio_map = {
+        "low": ReminderPriority.LOW,
+        "medium": ReminderPriority.MEDIUM,
+        "high": ReminderPriority.HIGH,
+    }
+    return prio_map.get(val, ReminderPriority.MEDIUM)
+
+
+def _parse_repeat_type(value: object) -> RepeatType:
+    if isinstance(value, RepeatType):
+        return value
+    val = str(value or "").strip().lower()
+    rep_map = {
+        "never": RepeatType.NEVER,
+        "daily": RepeatType.DAILY,
+        "weekdays": RepeatType.WEEKDAYS,
+        "weekly": RepeatType.WEEKLY,
+        "monthly": RepeatType.MONTHLY,
+        "yearly": RepeatType.YEARLY,
+    }
+    return rep_map.get(val, RepeatType.NEVER)
+
+
+def _parse_reminder_before(value: object) -> ReminderBefore:
+    if isinstance(value, ReminderBefore):
+        return value
+    val = str(value or "").strip().lower()
+    before_map = {
+        "at_time": ReminderBefore.AT_TIME,
+        "at scheduled time": ReminderBefore.AT_TIME,
+        "5_minutes": ReminderBefore.FIVE_MINUTES,
+        "5 minutes before": ReminderBefore.FIVE_MINUTES,
+        "10_minutes": ReminderBefore.TEN_MINUTES,
+        "10 minutes before": ReminderBefore.TEN_MINUTES,
+        "15_minutes": ReminderBefore.FIFTEEN_MINUTES,
+        "15 minutes before": ReminderBefore.FIFTEEN_MINUTES,
+        "30_minutes": ReminderBefore.THIRTY_MINUTES,
+        "30 minutes before": ReminderBefore.THIRTY_MINUTES,
+        "1_hour": ReminderBefore.ONE_HOUR,
+        "1 hour before": ReminderBefore.ONE_HOUR,
+        "1_day": ReminderBefore.ONE_DAY,
+        "1 day before": ReminderBefore.ONE_DAY,
+    }
+    return before_map.get(val, ReminderBefore.AT_TIME)
 
 
 class ReminderCreateRequest(BaseModel):
@@ -25,6 +89,26 @@ class ReminderCreateRequest(BaseModel):
     timezone: str = "UTC"
     repeat_type: RepeatType = RepeatType.NEVER
     reminder_before: ReminderBefore = ReminderBefore.AT_TIME
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def validate_category(cls, v: object) -> ReminderCategory:
+        return _parse_category(v)
+
+    @field_validator("priority", mode="before")
+    @classmethod
+    def validate_priority(cls, v: object) -> ReminderPriority:
+        return _parse_priority(v)
+
+    @field_validator("repeat_type", mode="before")
+    @classmethod
+    def validate_repeat_type(cls, v: object) -> RepeatType:
+        return _parse_repeat_type(v)
+
+    @field_validator("reminder_before", mode="before")
+    @classmethod
+    def validate_reminder_before(cls, v: object) -> ReminderBefore:
+        return _parse_reminder_before(v)
 
     @model_validator(mode="after")
     def validate_future_time(self) -> "ReminderCreateRequest":
@@ -44,6 +128,26 @@ class ReminderUpdateRequest(BaseModel):
     timezone: Optional[str] = None
     repeat_type: Optional[RepeatType] = None
     reminder_before: Optional[ReminderBefore] = None
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def validate_category(cls, v: object) -> Optional[ReminderCategory]:
+        return _parse_category(v) if v is not None else None
+
+    @field_validator("priority", mode="before")
+    @classmethod
+    def validate_priority(cls, v: object) -> Optional[ReminderPriority]:
+        return _parse_priority(v) if v is not None else None
+
+    @field_validator("repeat_type", mode="before")
+    @classmethod
+    def validate_repeat_type(cls, v: object) -> Optional[RepeatType]:
+        return _parse_repeat_type(v) if v is not None else None
+
+    @field_validator("reminder_before", mode="before")
+    @classmethod
+    def validate_reminder_before(cls, v: object) -> Optional[ReminderBefore]:
+        return _parse_reminder_before(v) if v is not None else None
 
 
 class SnoozeRequest(BaseModel):

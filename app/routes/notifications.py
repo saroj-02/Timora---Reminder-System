@@ -99,3 +99,33 @@ async def test_notification(current_user: User = Depends(get_current_user)) -> d
             detail="No active push subscriptions found. Please enable notifications first.",
         )
     return {"message": f"Test notification sent to {count} device(s)"}
+
+
+@router.post("/test-email")
+async def test_email_notification(current_user: User = Depends(get_current_user)) -> dict:
+    """Send a test reminder email to verify SMTP configuration."""
+    from app.services.email_service import send_reminder_email
+    from app.utils.timezone import format_local, now_utc
+
+    user_email = str(current_user.email).strip()
+    if not user_email:
+        raise HTTPException(status_code=400, detail="User email address is missing.")
+
+    tz = current_user.timezone or "Asia/Kolkata"
+    current_time_str = format_local(now_utc(), tz, "%d %b %Y, %I:%M %p")
+
+    success = await send_reminder_email(
+        recipient=user_email,
+        title="Test Reminder from Timora",
+        scheduled_time=current_time_str,
+        category="Personal",
+        priority="High",
+    )
+
+    if not success:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to send test email. Please check your SMTP settings in .env",
+        )
+
+    return {"message": f"Test email sent successfully to {user_email}!"}

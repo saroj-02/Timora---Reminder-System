@@ -111,12 +111,15 @@ async def settings_page() -> None:
                 value=int(user_data.get("sound_volume", 0.7) * 100),
             ).props("color=purple").style("margin-bottom:8px;")
 
-            with ui.row().classes("gap-md items-center q-mt-sm"):
+            with ui.row().classes("gap-md items-center q-mt-sm flex-wrap"):
                 ui.button("🔊 Preview Sound", on_click=_preview_sound).props("outline").style(
                     "border-color:rgba(124,58,237,0.4);color:#A78BFA;border-radius:8px;"
                 )
                 ui.button("Send Test Push", on_click=_send_test_push).props("outline").style(
                     "border-color:rgba(37,99,235,0.4);color:#60A5FA;border-radius:8px;"
+                )
+                ui.button("📧 Send Test Email", on_click=_send_test_email).props("outline").style(
+                    "border-color:rgba(16,185,129,0.4);color:#34D399;border-radius:8px;"
                 )
 
             async def save_notifications() -> None:
@@ -258,6 +261,15 @@ async def _send_test_push() -> None:
         toast_success("Test push sent! Check your browser.")
     except Exception:
         toast_error("No subscriptions found. Enable notifications first.")
+
+
+async def _send_test_email() -> None:
+    try:
+        res = await api_post("/api/notifications/test-email")
+        msg = res.get("message") if isinstance(res, dict) else "Test email sent!"
+        toast_success(f"{msg} 📬")
+    except Exception as exc:
+        toast_error(f"Failed to send email: {exc}")
 
 
 def _do_logout() -> None:
