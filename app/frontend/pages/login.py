@@ -3,12 +3,18 @@ Timora – Login Page
 """
 from __future__ import annotations
 
+import logging
+
+import httpx
 from nicegui import ui
 
 from app.frontend.api_client import api_post
 from app.frontend.components.toast import toast_error, toast_success
 from app.frontend.state import is_authenticated, set_token, set_user_data
 from app.frontend.theme import inject_global_styles, inject_theme
+
+
+logger = logging.getLogger(__name__)
 
 
 def login_page() -> None:
@@ -107,8 +113,25 @@ def login_page() -> None:
                     else:
                         error_label.text = "Invalid email or password."
                         error_label.style("display:block;")
-                except Exception:
-                    error_label.text = "Invalid email or password."
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code == 401:
+                        error_label.text = "Invalid email or password."
+                    else:
+                        error_label.text = (
+                            "The server returned an error. Please try again."
+                        )
+                    error_label.style("display:block;")
+                except Exception as exc:
+                    error_label.text = (
+                        "Unable to reach the server. Please try again."
+                    )
+                    from app.frontend.api_client import BASE_URL
+
+                    logger.error(
+                        "Login request failed | base_url=%s | error=%s",
+                        BASE_URL,
+                        exc,
+                    )
                     error_label.style("display:block;")
                 finally:
                     login_btn.props(remove="loading")

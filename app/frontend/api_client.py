@@ -5,6 +5,7 @@ Helper for NiceGUI pages to call FastAPI endpoints with the stored token.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Optional
 
 import httpx
@@ -14,7 +15,17 @@ from app.frontend.state import get_token
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = f"http://127.0.0.1:{settings.APP_PORT}"
+API_PORT = os.getenv(
+    "PORT",
+    str(settings.APP_PORT),
+)
+
+BASE_URL = f"http://127.0.0.1:{API_PORT}"
+
+logger.info(
+    "Frontend API client configured | base_url=%s",
+    BASE_URL,
+)
 
 
 async def api_get(path: str, params: Optional[dict] = None) -> dict | list | None:
