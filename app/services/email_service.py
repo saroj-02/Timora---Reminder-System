@@ -12,13 +12,24 @@ import smtplib
 import ssl
 import httpx
 from email.message import EmailMessage
-from email.utils import formataddr
+from email.utils import formataddr, parseaddr
 from typing import Optional
 
 from app.config import settings
 
 
 logger = logging.getLogger(__name__)
+
+_PUBLIC_EMAIL_DOMAINS = {
+    "gmail.com",
+    "googlemail.com",
+    "outlook.com",
+    "hotmail.com",
+    "live.com",
+    "yahoo.com",
+    "icloud.com",
+    "aol.com",
+}
 
 
 # =============================================================================
@@ -56,6 +67,27 @@ def _clean_password(
     return "".join(
         _clean(value).split()
     )
+
+
+def _resend_sender() -> tuple[str, bool]:
+    """Return a sender Resend can accept without domain verification."""
+
+    configured_sender = (
+        _clean(settings.RESEND_FROM_EMAIL)
+        or _clean(settings.SMTP_FROM_EMAIL)
+    )
+
+    _, address = parseaddr(configured_sender)
+    domain = address.rsplit("@", 1)[-1].lower() if "@" in address else ""
+
+    if domain in _PUBLIC_EMAIL_DOMAINS:
+        fallback_sender = (
+            _clean(settings.RESEND_FALLBACK_FROM_EMAIL)
+            or "onboarding@resend.dev"
+        )
+        return fallback_sender, True
+
+    return configured_sender, False
 
 
 def smtp_configuration_status() -> dict[str, object]:
@@ -117,11 +149,10 @@ async def _send_email_via_resend(
 ) -> bool:
     """Send email through HTTPS, which works on hosts blocking SMTP ports."""
 
+    started_at = asyncio.get_running_loop().time()
+
     api_key = _clean(settings.RESEND_API_KEY)
-    from_email = (
-        _clean(settings.RESEND_FROM_EMAIL)
-        or _clean(settings.SMTP_FROM_EMAIL)
-    )
+    from_email, sender_replaced = _resend_sender()
 
     if not api_key:
         logger.error(
@@ -134,6 +165,15 @@ async def _send_email_via_resend(
             "EMAIL FAILED: RESEND_FROM_EMAIL is missing."
         )
         return False
+
+    if sender_replaced:
+        logger.warning(
+            "RESEND sender %s is not a verifiable domain; using %s. "
+            "Verify a custom domain for production delivery.",
+            _clean(settings.RESEND_FROM_EMAIL)
+            or _clean(settings.SMTP_FROM_EMAIL),
+            from_email,
+        )
 
     payload = {
         "from": f"{_clean(settings.SMTP_FROM_NAME) or 'Timora'} <{from_email}>",
@@ -162,15 +202,18 @@ async def _send_email_via_resend(
 
         if response.status_code not in (200, 201):
             logger.error(
-                "EMAIL API FAILED | provider=resend | status=%s | response=%s",
+                "EMAIL API FAILED | provider=resend | status=%s | "
+                "latency_seconds=%.3f | response=%s",
                 response.status_code,
+                asyncio.get_running_loop().time() - started_at,
                 response.text[:500],
             )
             return False
 
         logger.info(
-            "EMAIL API SUCCESS | provider=resend | to=%s",
+            "EMAIL API SUCCESS | provider=resend | to=%s | latency_seconds=%.3f",
             recipient,
+            asyncio.get_running_loop().time() - started_at,
         )
         return True
 
@@ -485,6 +528,13 @@ This email was automatically sent by Timora – Smart Reminder.
 
         if resend_success:
             return True
+
+        if not settings.EMAIL_SMTP_FALLBACK:
+            logger.error(
+                "SMTP fallback disabled; configure a verified Resend domain "
+                "or set EMAIL_SMTP_FALLBACK=true on a host that permits SMTP.",
+            )
+            return False
 
         logger.warning(
             "RESEND DELIVERY FAILED; falling back to SMTP | to=%s",

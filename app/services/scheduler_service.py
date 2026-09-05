@@ -42,9 +42,9 @@ logger = logging.getLogger(__name__)
 # Configuration
 # =============================================================================
 
-RECOVERY_INTERVAL_SECONDS = 60
+RECOVERY_INTERVAL_SECONDS = 10
 
-EMAIL_RETRY_SECONDS = 120
+EMAIL_RETRY_SECONDS = 30
 
 MISFIRE_GRACE_SECONDS = 300
 
@@ -999,12 +999,21 @@ async def _execute_reminder_job(
 
         logger.info(
             "REMINDER DUE | "
-            "reminder=%s | title=%s | scheduled=%s | status=%s",
+            "reminder=%s | title=%s | scheduled=%s | trigger=%s | "
+            "lateness_seconds=%.3f | status=%s",
             reminder.id,
             reminder.title,
             _as_utc(
                 reminder.scheduled_time_utc
             ).isoformat(),
+            get_reminder_trigger_time(reminder).isoformat(),
+            max(
+                0.0,
+                (
+                    datetime.now(timezone.utc)
+                    - get_reminder_trigger_time(reminder)
+                ).total_seconds(),
+            ),
             _enum_value(
                 reminder.status
             ),

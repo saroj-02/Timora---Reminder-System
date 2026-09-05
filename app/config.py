@@ -51,7 +51,9 @@ class Settings(BaseSettings):
     # ── Email API ────────────────────────────────────────────────────────────
     RESEND_API_KEY: str = ""
     RESEND_FROM_EMAIL: str = ""
+    RESEND_FALLBACK_FROM_EMAIL: str = "onboarding@resend.dev"
     RESEND_API_URL: str = "https://api.resend.com/emails"
+    EMAIL_SMTP_FALLBACK: bool = False
 
     # ── App ───────────────────────────────────────────────────────────────────
     APP_HOST: str = "0.0.0.0"
