@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from typing import cast
 
 from fastapi import FastAPI, Request
-from nicegui import app, ui
+from nicegui import ui
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -314,14 +314,6 @@ ui.run_with(
     favicon="⏰",
     dark=True,
 )
-
-# Explicit NiceGUI hooks for guaranteed initialization
-app.on_startup(init_db)
-app.on_startup(start_scheduler)
-app.on_startup(_ensure_vapid)
-app.on_shutdown(stop_scheduler)
-app.on_shutdown(close_db)
-
 
 if __name__ == "__main__":
     import uvicorn

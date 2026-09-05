@@ -8,7 +8,7 @@ import secrets
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import AnyHttpUrl, field_validator
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -50,7 +50,13 @@ class Settings(BaseSettings):
 
     # ── App ───────────────────────────────────────────────────────────────────
     APP_HOST: str = "0.0.0.0"
-    APP_PORT: int = 8000
+    APP_PORT: int = Field(
+        default=8000,
+        validation_alias=AliasChoices(
+            "APP_PORT",
+            "PORT",
+        ),
+    )
     APP_DEBUG: bool = True
     APP_TITLE: str = "Timora – Smart Reminder"
     APP_URL: str = "http://localhost:8000"
