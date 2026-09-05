@@ -205,7 +205,9 @@ async def _get_reminder_user(
 
         if ObjectId.is_valid(user_id):
             try:
-                user = await User.get(user_id)
+                user = await User.find_one(
+                    {"_id": ObjectId(user_id)}
+                )
                 if user is not None:
                     return user
             except Exception:
@@ -213,7 +215,7 @@ async def _get_reminder_user(
 
             try:
                 user = await User.find_one(
-                    User.id == ObjectId(user_id)
+                    {"_id": ObjectId(user_id)}
                 )
                 if user is not None:
                     return user
@@ -222,7 +224,7 @@ async def _get_reminder_user(
 
         try:
             return await User.find_one(
-                User.id == user_id
+                {"_id": user_id}
             )
         except Exception:
             return None
@@ -267,8 +269,7 @@ async def _send_email_notification(
                 reminder.id,
                 reminder.user_id,
             )
-            # In test environments without real users, allow completion
-            return True
+            return False
 
         scheduled_time = (
             _formatted_reminder_time(
@@ -729,13 +730,13 @@ async def _get_reminder_by_id(
 
         if ObjectId.is_valid(rid):
             reminder = await Reminder.find_one(
-                Reminder.id == ObjectId(rid)
+                {"_id": ObjectId(rid)}
             )
             if reminder is not None:
                 return reminder
 
         return await Reminder.find_one(
-            Reminder.id == rid
+            {"_id": rid}
         )
 
     except Exception:
@@ -1127,20 +1128,17 @@ async def restore_reminder_jobs() -> None:
 
     try:
         pending = await Reminder.find(
-            Reminder.status
-            == ReminderStatus.PENDING
+            {"status": ReminderStatus.PENDING.value}
         ).to_list()
 
         snoozed = await Reminder.find(
-            Reminder.status
-            == ReminderStatus.SNOOZED
+            {"status": ReminderStatus.SNOOZED.value}
         ).to_list()
 
         # IMPORTANT:
         # Completed reminders with no delivered email also need restoring.
         completed = await Reminder.find(
-            Reminder.status
-            == ReminderStatus.COMPLETED
+            {"status": ReminderStatus.COMPLETED.value}
         ).to_list()
 
         completed = [
@@ -1239,18 +1237,15 @@ async def _recovery_scan() -> None:
 
     try:
         pending = await Reminder.find(
-            Reminder.status
-            == ReminderStatus.PENDING
+            {"status": ReminderStatus.PENDING.value}
         ).to_list()
 
         snoozed = await Reminder.find(
-            Reminder.status
-            == ReminderStatus.SNOOZED
+            {"status": ReminderStatus.SNOOZED.value}
         ).to_list()
 
         completed = await Reminder.find(
-            Reminder.status
-            == ReminderStatus.COMPLETED
+            {"status": ReminderStatus.COMPLETED.value}
         ).to_list()
 
         completed = [
@@ -1369,15 +1364,15 @@ async def _process_due_reminders() -> int:
     processed = 0
 
     pending = await Reminder.find(
-        Reminder.status == ReminderStatus.PENDING,
+        {"status": ReminderStatus.PENDING.value},
     ).to_list()
 
     snoozed = await Reminder.find(
-        Reminder.status == ReminderStatus.SNOOZED,
+        {"status": ReminderStatus.SNOOZED.value},
     ).to_list()
 
     completed = await Reminder.find(
-        Reminder.status == ReminderStatus.COMPLETED,
+        {"status": ReminderStatus.COMPLETED.value},
     ).to_list()
 
     candidates = (

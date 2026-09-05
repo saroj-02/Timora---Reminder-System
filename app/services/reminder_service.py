@@ -18,7 +18,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional, cast
 from zoneinfo import ZoneInfo
 
-from beanie.operators import In
 from bson import ObjectId
 
 from app.models.reminder import (
@@ -144,8 +143,10 @@ async def get_reminder(
         return None
 
     return await Reminder.find_one(
-        Reminder.id == oid,
-        Reminder.user_id == user_id,
+        {
+            "_id": oid,
+            "user_id": user_id,
+        }
     )
 
 
@@ -173,25 +174,26 @@ async def list_reminders(
     """
 
     conditions: list[Any] = [
-        Reminder.user_id == user_id
+        {"user_id": user_id}
     ]
 
     if status_filter:
         conditions.append(
-            In(
-                Reminder.status,
-                list(status_filter),
-            )
+            {
+                "status": {
+                    "$in": list(status_filter)
+                }
+            }
         )
 
     if category:
         conditions.append(
-            Reminder.category == category
+            {"category": category}
         )
 
     if priority:
         conditions.append(
-            Reminder.priority == priority
+            {"priority": priority}
         )
 
     query = Reminder.find(
