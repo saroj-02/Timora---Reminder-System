@@ -80,6 +80,8 @@ class Reminder(Document):
 
     user_id: str
 
+    recipient_email: Optional[str] = None
+
     title: str
 
     description: Optional[str] = None

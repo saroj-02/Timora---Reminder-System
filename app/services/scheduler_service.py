@@ -242,17 +242,21 @@ async def _send_email_notification(
     """
 
     try:
-        user = await _get_reminder_user(
-            reminder
-        )
+        recipient = str(
+            reminder.recipient_email or ""
+        ).strip()
 
-        recipient = ""
-        if user is not None:
-            recipient = str(
-                user.email
-            ).strip()
-        elif "@" in reminder.user_id:
-            recipient = reminder.user_id.strip()
+        if not recipient:
+            user = await _get_reminder_user(
+                reminder
+            )
+
+            if user is not None:
+                recipient = str(
+                    user.email
+                ).strip()
+            elif "@" in reminder.user_id:
+                recipient = reminder.user_id.strip()
 
         if not recipient:
             logger.warning(

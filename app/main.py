@@ -29,6 +29,7 @@ from app.routes.notifications import router as notifications_router
 from app.routes.reminders import router as reminders_router
 from app.routes.users import router as users_router
 from app.services.scheduler_service import start_scheduler, stop_scheduler
+from app.services.email_service import smtp_configuration_status
 
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -72,6 +73,19 @@ async def lifespan(application: FastAPI):
     await init_db()
     start_scheduler()
     _ensure_vapid()
+
+    smtp_status = smtp_configuration_status()
+    logger.info(
+        "SMTP STARTUP CHECK | host=%s | port=%s | "
+        "username_configured=%s | password_configured=%s | "
+        "from_email_configured=%s | tls=%s",
+        smtp_status["host"],
+        smtp_status["port"],
+        smtp_status["username_configured"],
+        smtp_status["password_configured"],
+        smtp_status["from_email_configured"],
+        smtp_status["tls"],
+    )
 
     logger.info(
         "🚀 Timora started on %s:%s",

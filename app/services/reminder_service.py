@@ -79,6 +79,7 @@ async def create_reminder(
 
     reminder = Reminder(
         user_id=str(user.id),
+        recipient_email=str(user.email).strip().lower(),
         title=body.title,
         description=body.description,
         category=body.category,
