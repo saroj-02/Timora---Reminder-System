@@ -29,5 +29,5 @@ RUN python3 scripts/generate_icons.py
 # Expose port
 EXPOSE 8000
 
-# Default entrypoint for app
-CMD ["uvicorn", "app.main:fast_api", "--host", "0.0.0.0", "--port", "8000"]
+# Render provides PORT for web services; keep 8000 as the local default.
+CMD ["sh", "-c", "exec uvicorn app.main:fast_api --host 0.0.0.0 --port ${PORT:-8000}"]
