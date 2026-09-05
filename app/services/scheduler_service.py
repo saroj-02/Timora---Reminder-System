@@ -213,15 +213,6 @@ async def _get_reminder_user(
             except Exception:
                 pass
 
-            try:
-                user = await User.find_one(
-                    {"_id": ObjectId(user_id)}
-                )
-                if user is not None:
-                    return user
-            except Exception:
-                pass
-
         try:
             return await User.find_one(
                 {"_id": user_id}

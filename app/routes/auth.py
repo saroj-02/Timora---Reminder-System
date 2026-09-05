@@ -35,7 +35,10 @@ limiter = Limiter(key_func=get_remote_address)
 @router.post("/signup", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def signup(request: Request, response: Response, body: SignupRequest = Body(...)) -> TokenResponse:
-    existing = await User.find_one(User.email == body.email)
+    email = str(body.email).strip().lower()
+    existing = await User.find_one(
+        {"email": email}
+    )
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -44,7 +47,7 @@ async def signup(request: Request, response: Response, body: SignupRequest = Bod
 
     user = User(
         name=body.name,
-        email=body.email,
+        email=email,
         password_hash=hash_password(body.password),
     )
     await user.insert()
@@ -59,7 +62,10 @@ async def signup(request: Request, response: Response, body: SignupRequest = Bod
 @router.post("/login", response_model=TokenResponse)
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def login(request: Request, response: Response, body: LoginRequest = Body(...)) -> TokenResponse:
-    user = await User.find_one(User.email == body.email)
+    email = str(body.email).strip().lower()
+    user = await User.find_one(
+        {"email": email}
+    )
     if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
