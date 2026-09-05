@@ -260,6 +260,11 @@ cp .env.example .env
 | `VAPID_PUBLIC_KEY` | *(Auto-generated on 1st run)* | VAPID public key for Web Push |
 | `VAPID_PRIVATE_KEY` | *(Auto-generated on 1st run)* | VAPID private key (Keep secret) |
 | `VAPID_CLAIMS_EMAIL` | `admin@timora.app` | Contact email for push services |
+| `SMTP_HOST` / `SMTP_PORT` | *(empty)* / `587` | SMTP server used directly and as the fallback email provider |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` | *(empty)* | SMTP credentials; use a Gmail App Password when using Gmail SMTP |
+| `SMTP_FROM_EMAIL` | `SMTP_USERNAME` | Sender address for SMTP; it must belong to the authenticated account |
+| `RESEND_API_KEY` | *(empty)* | Optional HTTPS email provider API key |
+| `RESEND_FROM_EMAIL` | *(empty)* | Resend sender; its domain must be verified in Resend |
 | `APP_HOST` | `0.0.0.0` | Host to bind server to |
 | `APP_PORT` | `8000` | Port for web application |
 | `APP_URL` | `http://localhost:8000` | Public URL for notification redirects |
@@ -436,6 +441,8 @@ docker compose down
    - Set `APP_URL=https://your-domain.com`.
    - Generate a cryptographically secure `JWT_SECRET`.
    - Configure a valid contact email in `VAPID_CLAIMS_EMAIL`.
+  - For Resend, verify the sender domain and set `RESEND_FROM_EMAIL` to an address on that domain. A Gmail address cannot be used as a Resend sender.
+  - Configure Gmail SMTP with a 16-character App Password (`SMTP_HOST=smtp.gmail.com`) as the fallback. Timora automatically falls back to SMTP when Resend rejects a request or is unavailable.
 3. **Reverse Proxy (Nginx Example)**:
 ```nginx
 server {

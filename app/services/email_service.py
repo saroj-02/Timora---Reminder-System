@@ -477,10 +477,18 @@ This email was automatically sent by Timora – Smart Reminder.
 """.strip()
 
     if _clean(settings.RESEND_API_KEY):
-        return await _send_email_via_resend(
+        resend_success = await _send_email_via_resend(
             recipient,
             subject,
             body,
+        )
+
+        if resend_success:
+            return True
+
+        logger.warning(
+            "RESEND DELIVERY FAILED; falling back to SMTP | to=%s",
+            recipient,
         )
 
     return await asyncio.to_thread(
