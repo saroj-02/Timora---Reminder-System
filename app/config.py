@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     SMTP_FROM_NAME: str = "Timora"
     SMTP_USE_TLS: bool = True
 
+    # ── Email API ────────────────────────────────────────────────────────────
+    RESEND_API_KEY: str = ""
+    RESEND_FROM_EMAIL: str = ""
+    RESEND_API_URL: str = "https://api.resend.com/emails"
+
     # ── App ───────────────────────────────────────────────────────────────────
     APP_HOST: str = "0.0.0.0"
     APP_PORT: int = Field(

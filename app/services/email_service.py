@@ -10,6 +10,7 @@ import asyncio
 import logging
 import smtplib
 import ssl
+import httpx
 from email.message import EmailMessage
 from email.utils import formataddr
 from typing import Optional
@@ -83,6 +84,14 @@ def smtp_configuration_status() -> dict[str, object]:
     )
 
     return {
+        "resend_configured": bool(
+            _clean(settings.RESEND_API_KEY)
+        ),
+        "resend_from_configured": bool(
+            _clean(
+                settings.RESEND_FROM_EMAIL
+            )
+        ),
         "host": host,
         "port": settings.SMTP_PORT,
         "username_configured": bool(
@@ -99,6 +108,83 @@ def smtp_configuration_status() -> dict[str, object]:
         ),
         "tls": settings.SMTP_USE_TLS,
     }
+
+
+async def _send_email_via_resend(
+    recipient: str,
+    subject: str,
+    body: str,
+) -> bool:
+    """Send email through HTTPS, which works on hosts blocking SMTP ports."""
+
+    api_key = _clean(settings.RESEND_API_KEY)
+    from_email = (
+        _clean(settings.RESEND_FROM_EMAIL)
+        or _clean(settings.SMTP_FROM_EMAIL)
+    )
+
+    if not api_key:
+        logger.error(
+            "EMAIL FAILED: RESEND_API_KEY is missing."
+        )
+        return False
+
+    if not from_email:
+        logger.error(
+            "EMAIL FAILED: RESEND_FROM_EMAIL is missing."
+        )
+        return False
+
+    payload = {
+        "from": f"{_clean(settings.SMTP_FROM_NAME) or 'Timora'} <{from_email}>",
+        "to": [recipient.strip()],
+        "subject": subject,
+        "text": body,
+    }
+
+    try:
+        logger.info(
+            "EMAIL API SEND START | provider=resend | to=%s",
+            recipient,
+        )
+
+        async with httpx.AsyncClient(
+            timeout=30.0
+        ) as client:
+            response = await client.post(
+                settings.RESEND_API_URL,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+
+        if response.status_code not in (200, 201):
+            logger.error(
+                "EMAIL API FAILED | provider=resend | status=%s | response=%s",
+                response.status_code,
+                response.text[:500],
+            )
+            return False
+
+        logger.info(
+            "EMAIL API SUCCESS | provider=resend | to=%s",
+            recipient,
+        )
+        return True
+
+    except httpx.HTTPError:
+        logger.exception(
+            "EMAIL API FAILED: HTTPS request error | provider=resend"
+        )
+        return False
+
+    except Exception:
+        logger.exception(
+            "EMAIL API FAILED: unexpected error | provider=resend"
+        )
+        return False
 
 
 # =============================================================================
@@ -389,6 +475,13 @@ Open Timora to manage this reminder.
 
 This email was automatically sent by Timora – Smart Reminder.
 """.strip()
+
+    if _clean(settings.RESEND_API_KEY):
+        return await _send_email_via_resend(
+            recipient,
+            subject,
+            body,
+        )
 
     return await asyncio.to_thread(
         _send_email,

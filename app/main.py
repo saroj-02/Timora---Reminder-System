@@ -78,13 +78,16 @@ async def lifespan(application: FastAPI):
     logger.info(
         "SMTP STARTUP CHECK | host=%s | port=%s | "
         "username_configured=%s | password_configured=%s | "
-        "from_email_configured=%s | tls=%s",
+        "from_email_configured=%s | tls=%s | "
+        "resend_configured=%s | resend_from_configured=%s",
         smtp_status["host"],
         smtp_status["port"],
         smtp_status["username_configured"],
         smtp_status["password_configured"],
         smtp_status["from_email_configured"],
         smtp_status["tls"],
+        smtp_status["resend_configured"],
+        smtp_status["resend_from_configured"],
     )
 
     logger.info(
