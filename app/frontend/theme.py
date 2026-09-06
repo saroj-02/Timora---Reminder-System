@@ -1433,6 +1433,13 @@ body,
         #E2E8F0 !important;
 }
 
+.sidebar {
+    background: #FFFFFF !important;
+
+    border-right-color:
+        #E2E8F0 !important;
+}
+
 .timora-header {
     background:
         rgba(
@@ -1471,6 +1478,10 @@ body,
     color: #64748B !important;
 }
 
+.sidebar-heading {
+    color: #64748B !important;
+}
+
 .sidebar-item:hover {
     background:
         rgba(
@@ -1499,6 +1510,10 @@ body,
     color: #64748B !important;
 }
 
+.sidebar-item:hover .sidebar-item-icon {
+    color: #7C3AED !important;
+}
+
 .sidebar-item.active .sidebar-item-icon {
     color: #7C3AED !important;
 }
@@ -1514,6 +1529,14 @@ body,
 
     border-color:
         #E2E8F0 !important;
+}
+
+.sidebar-status-title {
+    color: #475569 !important;
+}
+
+.sidebar-status-value.disabled {
+    color: #64748B !important;
 }
 
 .empty-state {

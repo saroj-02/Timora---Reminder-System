@@ -1,15 +1,6 @@
-services:
-  - type: web
-    name: timora-web
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
-    plan: free
+envVarGroups:
+  - name: timora-shared
     envVars:
-      - key: SCHEDULER_ENABLED
-        value: "false"
-      - key: APP_DEBUG
-        value: "false"
       - key: MONGODB_URL
         sync: false
       - key: DATABASE_NAME
@@ -20,6 +11,24 @@ services:
         sync: false
       - key: RESEND_FROM_EMAIL
         sync: false
+      - key: RESEND_API_URL
+        value: https://api.resend.com/emails
+      - key: EMAIL_SMTP_FALLBACK
+        value: "false"
+
+services:
+  - type: web
+    name: timora-web
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    envVars:
+      - fromGroup: timora-shared
+      - key: SCHEDULER_ENABLED
+        value: "false"
+      - key: APP_DEBUG
+        value: "false"
 
   - type: worker
     name: timora-reminder-worker
@@ -29,17 +38,8 @@ services:
     plan: starter
     dockerCommand: python -m app.worker
     envVars:
+      - fromGroup: timora-shared
       - key: SCHEDULER_ENABLED
         value: "true"
       - key: APP_DEBUG
         value: "false"
-      - key: MONGODB_URL
-        sync: false
-      - key: DATABASE_NAME
-        value: timora
-      - key: JWT_SECRET
-        sync: false
-      - key: RESEND_API_KEY
-        sync: false
-      - key: RESEND_FROM_EMAIL
-        sync: false
