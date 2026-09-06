@@ -447,6 +447,7 @@ docker compose down
   - For Resend production delivery, verify your domain in Resend and set `RESEND_FROM_EMAIL` to an address on that domain. Gmail addresses cannot be used as Resend senders.
   - On Render, set `EMAIL_SMTP_FALLBACK=false`; Render blocks direct Gmail SMTP connections. The app uses Resend over HTTPS and retries failed delivery after 30 seconds.
   - Deploy a separate Render **Background Worker** with command `python -m app.worker` and the same MongoDB, Resend, and JWT environment variables. Set `SCHEDULER_ENABLED=false` on the web service and `SCHEDULER_ENABLED=true` on the worker so only the worker sends reminders.
+    - This repository includes `render.yaml`; deploy it as a Render Blueprint so the web service and reminder worker are created together. Background Workers require a paid Render plan.
   - The worker keeps APScheduler alive while the web service sleeps or restarts. Do not rely on the web service's in-process scheduler for production delivery.
   - `onboarding@resend.dev` is only a temporary sandbox sender and Resend may restrict its recipients. A verified custom domain is required for unrestricted production delivery.
 3. **Reverse Proxy (Nginx Example)**:

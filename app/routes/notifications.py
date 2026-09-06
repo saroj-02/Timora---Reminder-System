@@ -15,6 +15,7 @@ from app.models.push_subscription import PushSubscription
 from app.models.user import User
 from app.services.auth_service import get_current_user
 from app.services.notification_service import notify_user
+from app.services.scheduler_service import get_scheduler
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 
@@ -132,3 +133,35 @@ async def test_email_notification(current_user: User = Depends(get_current_user)
         )
 
     return {"message": f"Test email sent successfully to {user_email}!"}
+
+
+@router.get("/email-status")
+async def email_status(current_user: User = Depends(get_current_user)) -> dict:
+    """Return safe email and scheduler diagnostics for the current deployment."""
+    from app.services.email_service import smtp_configuration_status
+
+    configuration = smtp_configuration_status()
+    scheduler = get_scheduler()
+
+    return {
+        "email_provider": (
+            "resend"
+            if configuration["resend_configured"]
+            else "smtp"
+        ),
+        "resend_configured": configuration["resend_configured"],
+        "resend_from_configured": configuration["resend_from_configured"],
+        "smtp_configured": all(
+            configuration[key]
+            for key in (
+                "host",
+                "username_configured",
+                "password_configured",
+                "from_email_configured",
+            )
+        ),
+        "scheduler_running": bool(
+            scheduler is not None and scheduler.running
+        ),
+        "recipient": str(current_user.email).strip(),
+    }

@@ -1,0 +1,45 @@
+services:
+  - type: web
+    name: timora-web
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    envVars:
+      - key: SCHEDULER_ENABLED
+        value: "false"
+      - key: APP_DEBUG
+        value: "false"
+      - key: MONGODB_URL
+        sync: false
+      - key: DATABASE_NAME
+        value: timora
+      - key: JWT_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        sync: false
+
+  - type: worker
+    name: timora-reminder-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    dockerCommand: python -m app.worker
+    envVars:
+      - key: SCHEDULER_ENABLED
+        value: "true"
+      - key: APP_DEBUG
+        value: "false"
+      - key: MONGODB_URL
+        sync: false
+      - key: DATABASE_NAME
+        value: timora
+      - key: JWT_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        sync: false

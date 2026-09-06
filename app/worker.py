@@ -11,6 +11,11 @@ from app.services.scheduler_service import start_scheduler, stop_scheduler
 
 logger = logging.getLogger(__name__)
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+)
+
 
 def worker_status() -> str:
     """Return information about the active background-worker strategy."""
@@ -21,6 +26,7 @@ def worker_status() -> str:
 async def run_worker() -> None:
     """Run the reminder scheduler as a long-lived background process."""
 
+    logger.info("Timora reminder worker initializing")
     await init_db()
     start_scheduler()
     logger.info("Timora reminder worker started")
