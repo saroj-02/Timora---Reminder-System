@@ -20,18 +20,6 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-_PUBLIC_EMAIL_DOMAINS = {
-    "gmail.com",
-    "googlemail.com",
-    "outlook.com",
-    "hotmail.com",
-    "live.com",
-    "yahoo.com",
-    "icloud.com",
-    "aol.com",
-}
-
-
 # =============================================================================
 # Configuration Helpers
 # =============================================================================
@@ -70,24 +58,12 @@ def _clean_password(
 
 
 def _resend_sender() -> tuple[str, bool]:
-    """Return a sender Resend can accept without domain verification."""
+    """Return the explicitly configured Resend sender."""
 
-    configured_sender = (
-        _clean(settings.RESEND_FROM_EMAIL)
-        or _clean(settings.SMTP_FROM_EMAIL)
-    )
+    configured_sender = _clean(settings.RESEND_FROM_EMAIL)
 
     _, address = parseaddr(configured_sender)
-    domain = address.rsplit("@", 1)[-1].lower() if "@" in address else ""
-
-    if domain in _PUBLIC_EMAIL_DOMAINS:
-        fallback_sender = (
-            _clean(settings.RESEND_FALLBACK_FROM_EMAIL)
-            or "onboarding@resend.dev"
-        )
-        return fallback_sender, True
-
-    return configured_sender, False
+    return address or configured_sender, False
 
 
 def smtp_configuration_status() -> dict[str, object]:
@@ -152,7 +128,7 @@ async def _send_email_via_resend(
     started_at = asyncio.get_running_loop().time()
 
     api_key = _clean(settings.RESEND_API_KEY)
-    from_email, sender_replaced = _resend_sender()
+    from_email, _ = _resend_sender()
 
     if not api_key:
         logger.error(
@@ -165,15 +141,6 @@ async def _send_email_via_resend(
             "EMAIL FAILED: RESEND_FROM_EMAIL is missing."
         )
         return False
-
-    if sender_replaced:
-        logger.warning(
-            "RESEND sender %s is not a verifiable domain; using %s. "
-            "Verify a custom domain for production delivery.",
-            _clean(settings.RESEND_FROM_EMAIL)
-            or _clean(settings.SMTP_FROM_EMAIL),
-            from_email,
-        )
 
     payload = {
         "from": f"{_clean(settings.SMTP_FROM_NAME) or 'Timora'} <{from_email}>",

@@ -71,7 +71,13 @@ def rate_limit_exception_handler(
 async def lifespan(application: FastAPI):
     # Startup
     await init_db()
-    start_scheduler()
+    if settings.SCHEDULER_ENABLED:
+        start_scheduler()
+    else:
+        logger.info(
+            "APScheduler DISABLED | use the dedicated background worker "
+            "for reminder delivery"
+        )
     _ensure_vapid()
 
     smtp_status = smtp_configuration_status()

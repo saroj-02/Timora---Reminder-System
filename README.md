@@ -265,8 +265,9 @@ cp .env.example .env
 | `SMTP_FROM_EMAIL` | `SMTP_USERNAME` | Sender address for SMTP; it must belong to the authenticated account |
 | `RESEND_API_KEY` | *(empty)* | Optional HTTPS email provider API key |
 | `RESEND_FROM_EMAIL` | *(empty)* | Resend sender; its domain must be verified in Resend |
-| `RESEND_FALLBACK_FROM_EMAIL` | `onboarding@resend.dev` | Temporary Resend sandbox sender for public email domains |
+| `RESEND_FALLBACK_FROM_EMAIL` | *(empty)* | Legacy setting; production delivery requires a verified Resend sender domain |
 | `EMAIL_SMTP_FALLBACK` | `false` | Opt-in SMTP fallback; keep disabled on Render because SMTP is blocked |
+| `SCHEDULER_ENABLED` | `true` | Enable in-process reminder scheduling; disable on the Render web service when using a Background Worker |
 | `APP_HOST` | `0.0.0.0` | Host to bind server to |
 | `APP_PORT` | `8000` | Port for web application |
 | `APP_URL` | `http://localhost:8000` | Public URL for notification redirects |
@@ -445,7 +446,8 @@ docker compose down
    - Configure a valid contact email in `VAPID_CLAIMS_EMAIL`.
   - For Resend production delivery, verify your domain in Resend and set `RESEND_FROM_EMAIL` to an address on that domain. Gmail addresses cannot be used as Resend senders.
   - On Render, set `EMAIL_SMTP_FALLBACK=false`; Render blocks direct Gmail SMTP connections. The app uses Resend over HTTPS and retries failed delivery after 30 seconds.
-  - Reminder recovery runs every 10 seconds after a restart, so a reminder whose in-memory scheduler job was lost is restored quickly. For exact delivery while the service is asleep, use an always-on Render instance or an external worker; an in-process scheduler cannot execute during shutdown.
+  - Deploy a separate Render **Background Worker** with command `python -m app.worker` and the same MongoDB, Resend, and JWT environment variables. Set `SCHEDULER_ENABLED=false` on the web service and `SCHEDULER_ENABLED=true` on the worker so only the worker sends reminders.
+  - The worker keeps APScheduler alive while the web service sleeps or restarts. Do not rely on the web service's in-process scheduler for production delivery.
   - `onboarding@resend.dev` is only a temporary sandbox sender and Resend may restrict its recipients. A verified custom domain is required for unrestricted production delivery.
 3. **Reverse Proxy (Nginx Example)**:
 ```nginx

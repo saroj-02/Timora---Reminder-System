@@ -1,22 +1,12 @@
-"""
-Timora – Background Worker
-
-Timora currently uses APScheduler through:
-
-    app.services.scheduler_service
-
-The scheduler is started automatically by app/main.py.
-
-This module is intentionally kept minimal so that a second
-Celery-based scheduler does not process reminders at the same time.
-
-If Timora is migrated to Celery + Redis in the future, the worker
-implementation can be restored here.
-"""
+"""Timora background worker for durable reminder scheduling."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
+
+from app.database import close_db, init_db
+from app.services.scheduler_service import start_scheduler, stop_scheduler
 
 
 logger = logging.getLogger(__name__)
@@ -26,3 +16,21 @@ def worker_status() -> str:
     """Return information about the active background-worker strategy."""
 
     return "APScheduler is the active Timora reminder scheduler."
+
+
+async def run_worker() -> None:
+    """Run the reminder scheduler as a long-lived background process."""
+
+    await init_db()
+    start_scheduler()
+    logger.info("Timora reminder worker started")
+
+    try:
+        await asyncio.Event().wait()
+    finally:
+        stop_scheduler()
+        await close_db()
+
+
+if __name__ == "__main__":
+    asyncio.run(run_worker())

@@ -73,14 +73,14 @@ async def test_resend_failure_does_not_try_blocked_smtp_by_default(monkeypatch):
     assert result is False
 
 
-def test_public_sender_uses_resend_sandbox_sender(monkeypatch):
+def test_resend_sender_does_not_replace_public_sender(monkeypatch):
     monkeypatch.setattr(settings, "RESEND_FROM_EMAIL", "administrator@gmail.com")
     monkeypatch.setattr(settings, "SMTP_FROM_EMAIL", "")
 
     sender, replaced = email_service._resend_sender()
 
-    assert sender == "onboarding@resend.dev"
-    assert replaced is True
+    assert sender == "administrator@gmail.com"
+    assert replaced is False
 
 
 @pytest.mark.asyncio

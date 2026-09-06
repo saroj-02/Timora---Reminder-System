@@ -125,7 +125,10 @@ async def test_email_notification(current_user: User = Depends(get_current_user)
     if not success:
         raise HTTPException(
             status_code=500,
-            detail="Failed to send test email. Please check your SMTP settings in .env",
+            detail=(
+                "Failed to send test email. Check RESEND_API_KEY and "
+                "RESEND_FROM_EMAIL in Render, and verify the sender domain."
+            ),
         )
 
     return {"message": f"Test email sent successfully to {user_email}!"}
